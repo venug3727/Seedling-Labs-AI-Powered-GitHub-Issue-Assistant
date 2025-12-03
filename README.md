@@ -6,6 +6,11 @@ An intelligent web application that analyzes GitHub issues using AI to provide s
 
 ![GitHub Issue Assistant Demo](https://img.shields.io/badge/Status-Production_Ready-green)
 ![Docker](https://img.shields.io/badge/Docker-Ready-blue)
+[![Deployed on Vercel](https://img.shields.io/badge/Deployed-Vercel-black)](https://seedlinglabs-ai-github-issue-assistant.vercel.app/)
+
+## 🔗 Live Demo
+
+**🚀 Try it now: [https://seedlinglabs-ai-github-issue-assistant.vercel.app/](https://seedlinglabs-ai-github-issue-assistant.vercel.app/)**
 
 ---
 

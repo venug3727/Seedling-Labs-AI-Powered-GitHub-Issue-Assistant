@@ -5,13 +5,18 @@ Uses an Agentic approach with:
 - Persona: Senior Technical Product Manager
 - Few-shot prompting: 2 examples for reliable JSON output
 - Strict JSON schema enforcement
-- Gemini 1.5 Flash for fast, cost-effective analysis
+- Smart caching for latency & cost optimization
+- Confidence scoring for AI transparency
+- Draft response generation for agentic assistance
+- Gemini 2.0 Flash for fast, cost-effective analysis
 """
 
 import json
 import os
 import logging
-from typing import Optional
+import hashlib
+from typing import Optional, Dict, Tuple
+from datetime import datetime, timedelta
 
 import google.generativeai as genai
 
@@ -19,6 +24,53 @@ from app.models import GitHubIssueData, IssueAnalysis
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# SMART CACHE - Cost & Latency Optimization
+# ============================================================================
+class AnalysisCache:
+    """
+    In-memory cache for issue analysis results.
+    Saves API costs and reduces latency for repeated analyses.
+    """
+    def __init__(self, ttl_minutes: int = 60):
+        self._cache: Dict[str, Tuple[IssueAnalysis, datetime]] = {}
+        self._ttl = timedelta(minutes=ttl_minutes)
+    
+    def _generate_key(self, repo_url: str, issue_number: int, issue_updated: str) -> str:
+        """Generate a unique cache key including issue update time for freshness."""
+        raw_key = f"{repo_url}:{issue_number}:{issue_updated}"
+        return hashlib.md5(raw_key.encode()).hexdigest()
+    
+    def get(self, repo_url: str, issue_number: int, issue_updated: str) -> Optional[IssueAnalysis]:
+        """Retrieve cached analysis if available and not expired."""
+        key = self._generate_key(repo_url, issue_number, issue_updated)
+        if key in self._cache:
+            analysis, cached_at = self._cache[key]
+            if datetime.now() - cached_at < self._ttl:
+                logger.info(f"Cache HIT for {repo_url} #{issue_number}")
+                return analysis
+            else:
+                # Expired, remove from cache
+                del self._cache[key]
+                logger.info(f"Cache EXPIRED for {repo_url} #{issue_number}")
+        return None
+    
+    def set(self, repo_url: str, issue_number: int, issue_updated: str, analysis: IssueAnalysis):
+        """Store analysis result in cache."""
+        key = self._generate_key(repo_url, issue_number, issue_updated)
+        self._cache[key] = (analysis, datetime.now())
+        logger.info(f"Cache SET for {repo_url} #{issue_number}")
+    
+    def clear(self):
+        """Clear all cached entries."""
+        self._cache.clear()
+        logger.info("Cache cleared")
+
+
+# Global cache instance
+_analysis_cache = AnalysisCache(ttl_minutes=60)
 
 
 # ============================================================================
@@ -44,6 +96,21 @@ Your role is to analyze GitHub issues and provide structured, actionable insight
 - **question**: User seeking help or clarification
 - **other**: Anything that doesn't fit above categories
 
+### Confidence Scoring (0.0-1.0):
+Rate your confidence in this analysis:
+- **0.9-1.0**: Very clear issue with obvious classification and priority
+- **0.7-0.89**: Reasonably confident, but some ambiguity exists
+- **0.5-0.69**: Moderate uncertainty, limited context available
+- **Below 0.5**: Low confidence, issue is vague or conflicting information
+
+### Draft Response Guidelines:
+Write a professional, empathetic response that:
+- Thanks the user for reporting
+- Acknowledges the issue briefly
+- Indicates next steps or timeline expectations
+- Maintains a helpful, supportive tone
+- Is concise (2-4 sentences)
+
 ## Output Requirements:
 You MUST respond with ONLY valid JSON. No markdown, no explanations, just the JSON object.
 
@@ -54,7 +121,9 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, just the JS
     "priority_score": "integer - 1 to 5",
     "priority_justification": "string - Brief reasoning for the score",
     "suggested_labels": ["array", "of", "2-5", "labels"],
-    "potential_impact": "string - Impact on users, especially for bugs"
+    "potential_impact": "string - Impact on users, especially for bugs",
+    "confidence_score": "float - 0.0 to 1.0, your confidence in this analysis",
+    "draft_response": "string - A polite, professional response to post on GitHub"
 }
 """
 
@@ -85,7 +154,9 @@ State: open"""
     "priority_score": 5,
     "priority_justification": "Production crash affecting core authentication flow, blocking multiple enterprise customers and their teams from using the product entirely.",
     "suggested_labels": ["bug", "critical", "authentication", "SSO", "regression"],
-    "potential_impact": "Severe - Enterprise customers with teams of 50+ users are completely unable to access the application, causing significant business disruption and potential churn risk."
+    "potential_impact": "Severe - Enterprise customers with teams of 50+ users are completely unable to access the application, causing significant business disruption and potential churn risk.",
+    "confidence_score": 0.95,
+    "draft_response": "Hi @user, thank you for reporting this critical issue! We've confirmed the SSO crash affecting Google sign-in and have escalated this to our highest priority. Our team is actively investigating the null pointer in AuthManager. We'll provide updates here as we make progress and aim to have a fix deployed within 24 hours."
 }"""
     },
     {
@@ -110,7 +181,9 @@ State: open"""
     "priority_score": 2,
     "priority_justification": "Quality of life improvement with user interest, but not blocking any core functionality. Common feature request but requires significant UI work.",
     "suggested_labels": ["enhancement", "UI/UX", "accessibility", "good-first-issue"],
-    "potential_impact": "Low to moderate - Would improve user experience for night-time users and those with light sensitivity, but no functional impact on current users."
+    "potential_impact": "Low to moderate - Would improve user experience for night-time users and those with light sensitivity, but no functional impact on current users.",
+    "confidence_score": 0.92,
+    "draft_response": "Thanks for the suggestion! Dark mode is a popular request and we've added it to our feature backlog. While we can't commit to a specific timeline yet, we appreciate the feedback and will update this issue when we have more information on implementation plans."
 }"""
     }
 ]
@@ -120,6 +193,7 @@ class LLMService:
     """
     Service class for interacting with Google's Gemini LLM.
     Implements agentic prompt engineering for reliable issue analysis.
+    Includes smart caching for cost & latency optimization.
     """
 
     def __init__(self):
@@ -141,12 +215,15 @@ class LLMService:
                 "temperature": 0.3,  # Lower temperature for more consistent output
                 "top_p": 0.8,
                 "top_k": 40,
-                "max_output_tokens": 1024,
+                "max_output_tokens": 1500,  # Increased for draft_response
             },
             system_instruction=SYSTEM_PROMPT
         )
         
-        logger.info("LLM Service initialized with Gemini 2.0 Flash")
+        # Reference to global cache
+        self.cache = _analysis_cache
+        
+        logger.info("LLM Service initialized with Gemini 2.0 Flash + Smart Caching")
 
     def _format_issue_for_analysis(self, issue_data: GitHubIssueData) -> str:
         """
@@ -212,21 +289,29 @@ URL: {issue_data.html_url}{truncation_note}"""
             logger.error(f"Response was: {response_text[:500]}")
             raise ValueError(f"LLM did not return valid JSON: {e}")
 
-    async def analyze_issue(self, issue_data: GitHubIssueData) -> IssueAnalysis:
+    async def analyze_issue(self, issue_data: GitHubIssueData, repo_url: str = "", issue_number: int = 0) -> Tuple[IssueAnalysis, bool]:
         """
         Analyze a GitHub issue using the LLM with agentic prompting.
+        Includes smart caching for cost & latency optimization.
         
         Args:
             issue_data: Structured GitHub issue data
+            repo_url: Repository URL for cache key
+            issue_number: Issue number for cache key
             
         Returns:
-            IssueAnalysis: Structured analysis result
+            Tuple[IssueAnalysis, bool]: (analysis result, was_cached)
             
         Raises:
             ValueError: If LLM response cannot be parsed
             Exception: For API errors
         """
-        logger.info(f"Analyzing issue: {issue_data.title[:50]}...")
+        # Check cache first
+        cached_result = self.cache.get(repo_url, issue_number, issue_data.created_at)
+        if cached_result:
+            return cached_result, True
+        
+        logger.info(f"Analyzing issue: {issue_data.title[:50]}... (cache miss)")
         
         # Format the issue for the LLM
         user_prompt = self._format_issue_for_analysis(issue_data)
@@ -254,8 +339,11 @@ URL: {issue_data.html_url}{truncation_note}"""
             # Validate against Pydantic model
             analysis = IssueAnalysis(**analysis_dict)
             
-            logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}")
-            return analysis
+            # Store in cache
+            self.cache.set(repo_url, issue_number, issue_data.created_at, analysis)
+            
+            logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}, Confidence: {analysis.confidence_score}")
+            return analysis, False
             
         except Exception as e:
             logger.error(f"Error during LLM analysis: {e}")

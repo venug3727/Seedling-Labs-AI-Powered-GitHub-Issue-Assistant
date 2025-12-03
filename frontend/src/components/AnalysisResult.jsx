@@ -4,7 +4,10 @@
  * Displays the AI-generated analysis with:
  * - Visual priority tags (color-coded)
  * - Issue type badges
+ * - Confidence score indicator with warning
+ * - Draft response section (Agentic feature)
  * - Copy JSON button
+ * - Copy for Slack/Jira buttons
  * - Export to PDF
  * - Expandable sections
  */
@@ -32,6 +35,11 @@ import {
   HelpCircle,
   FileText,
   Download,
+  Gauge,
+  MessageCircle,
+  Hash,
+  Clipboard,
+  Database,
 } from "lucide-react";
 
 /**
@@ -140,14 +148,141 @@ const LabelChip = ({ label }) => {
   );
 };
 
+/**
+ * Confidence Score Indicator Component
+ * Shows a visual bar with warning for low confidence
+ */
+const ConfidenceIndicator = ({ score }) => {
+  const percentage = Math.round(score * 100);
+  const isLowConfidence = score < 0.7;
+
+  const getBarColor = () => {
+    if (score >= 0.9) return "bg-green-500";
+    if (score >= 0.7) return "bg-blue-500";
+    if (score >= 0.5) return "bg-yellow-500";
+    return "bg-red-500";
+  };
+
+  const getLabel = () => {
+    if (score >= 0.9) return "High Confidence";
+    if (score >= 0.7) return "Good Confidence";
+    if (score >= 0.5) return "Moderate Confidence";
+    return "Low Confidence";
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Gauge className="w-4 h-4 text-gray-500" />
+          <span className="text-sm font-medium text-gray-700">
+            AI Confidence
+          </span>
+        </div>
+        <span
+          className={`text-sm font-semibold ${
+            isLowConfidence ? "text-amber-600" : "text-gray-700"
+          }`}
+        >
+          {percentage}%
+        </span>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div
+          className={`h-full ${getBarColor()} transition-all duration-500`}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+
+      {/* Warning for low confidence */}
+      {isLowConfidence && (
+        <div className="flex items-center gap-2 p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            AI is unsure about this classification. Review carefully before
+            taking action.
+          </span>
+        </div>
+      )}
+
+      <p className="text-xs text-gray-500">{getLabel()}</p>
+    </div>
+  );
+};
+
+/**
+ * Draft Response Section Component
+ * Shows AI-generated reply with copy button
+ */
+const DraftResponseSection = ({ response, issueTitle }) => {
+  const [copied, setCopied] = useState(false);
+
+  const copyResponse = async () => {
+    try {
+      await navigator.clipboard.writeText(response);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  return (
+    <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <MessageCircle className="w-5 h-5 text-purple-600" />
+          <h4 className="font-semibold text-purple-900">Draft Response</h4>
+          <span className="px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full">
+            Agentic
+          </span>
+        </div>
+        <button
+          onClick={copyResponse}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium text-sm transition-all ${
+            copied
+              ? "bg-green-100 text-green-700"
+              : "bg-purple-100 text-purple-700 hover:bg-purple-200"
+          }`}
+        >
+          {copied ? (
+            <>
+              <Check className="w-3.5 h-3.5" />
+              Copied!
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" />
+              Copy Reply
+            </>
+          )}
+        </button>
+      </div>
+
+      <p className="text-gray-700 bg-white p-3 rounded-lg border border-purple-100 text-sm leading-relaxed">
+        {response}
+      </p>
+
+      <p className="text-xs text-purple-600 flex items-center gap-1">
+        <Lightbulb className="w-3 h-3" />
+        Copy and paste this response directly into the GitHub issue
+      </p>
+    </div>
+  );
+};
+
 const AnalysisResult = ({ data }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedSlack, setCopiedSlack] = useState(false);
+  const [copiedJira, setCopiedJira] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
   const [showIssueDetails, setShowIssueDetails] = useState(false);
   const [exporting, setExporting] = useState(false);
   const resultRef = useRef(null);
 
-  const { issue_data, analysis } = data;
+  const { issue_data, analysis, cached } = data;
 
   // Copy JSON to clipboard
   const copyToClipboard = async () => {
@@ -156,6 +291,65 @@ const AnalysisResult = ({ data }) => {
       await navigator.clipboard.writeText(jsonOutput);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  // Copy formatted for Slack
+  const copyForSlack = async () => {
+    const priorityEmoji = {
+      5: "🚨",
+      4: "⚠️",
+      3: "📌",
+      2: "📝",
+      1: "💭",
+    };
+
+    const typeLabel = analysis.type.replace("_", " ").toUpperCase();
+    const slackFormat = `${
+      priorityEmoji[analysis.priority_score] || "📋"
+    } *${typeLabel} - Priority ${analysis.priority_score}/5*
+*Issue:* #${issue_data.html_url.split("/").pop()} - ${issue_data.title}
+*Summary:* ${analysis.summary}
+*Impact:* ${analysis.potential_impact}
+*Labels:* ${analysis.suggested_labels.join(", ")}
+*Link:* ${issue_data.html_url}`;
+
+    try {
+      await navigator.clipboard.writeText(slackFormat);
+      setCopiedSlack(true);
+      setTimeout(() => setCopiedSlack(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  // Copy formatted for Jira
+  const copyForJira = async () => {
+    const jiraFormat = `h2. ${analysis.type
+      .replace("_", " ")
+      .toUpperCase()} - Priority ${analysis.priority_score}/5
+
+*Summary:* ${analysis.summary}
+
+*Priority Justification:* ${analysis.priority_justification}
+
+*Potential Impact:* ${analysis.potential_impact}
+
+*Suggested Labels:* ${analysis.suggested_labels.join(", ")}
+
+*Source:* [GitHub Issue #${issue_data.html_url.split("/").pop()}|${
+      issue_data.html_url
+    }]
+
+----
+_Analyzed by AI Issue Assistant_`;
+
+    try {
+      await navigator.clipboard.writeText(jiraFormat);
+      setCopiedJira(true);
+      setTimeout(() => setCopiedJira(false), 2000);
     } catch (err) {
       console.error("Failed to copy:", err);
     }
@@ -278,6 +472,17 @@ const AnalysisResult = ({ data }) => {
 
   return (
     <div className="space-y-6">
+      {/* Cache Indicator */}
+      {cached && (
+        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-700 text-sm">
+          <Database className="w-4 h-4" />
+          <span>
+            <strong>Cached Result:</strong> This analysis was served from cache
+            for faster response.
+          </span>
+        </div>
+      )}
+
       {/* Header with Issue Info */}
       <div className="bg-white rounded-xl shadow-lg overflow-hidden">
         {/* Title Bar */}
@@ -382,6 +587,11 @@ const AnalysisResult = ({ data }) => {
         </div>
 
         <div className="p-6 space-y-6">
+          {/* Confidence Score */}
+          {analysis.confidence_score !== undefined && (
+            <ConfidenceIndicator score={analysis.confidence_score} />
+          )}
+
           {/* Summary */}
           <div>
             <div className="flex items-center gap-2 text-sm font-medium text-gray-500 mb-2">
@@ -421,44 +631,102 @@ const AnalysisResult = ({ data }) => {
               ))}
             </div>
           </div>
+
+          {/* Draft Response - Agentic Feature */}
+          {analysis.draft_response && (
+            <DraftResponseSection
+              response={analysis.draft_response}
+              issueTitle={issue_data.title}
+            />
+          )}
         </div>
 
         {/* Actions Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
-          <button
-            onClick={() => setShowRawJson(!showRawJson)}
-            className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
-          >
-            {showRawJson ? "Hide" : "Show"} Raw JSON
-          </button>
-
-          <div className="flex items-center gap-2">
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
             <button
-              onClick={exportToPDF}
-              disabled={exporting}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+              onClick={() => setShowRawJson(!showRawJson)}
+              className="text-sm text-gray-600 hover:text-gray-800 transition-colors"
             >
-              <Download className="w-4 h-4" />
-              {exporting ? "Exporting..." : "Export PDF"}
+              {showRawJson ? "Hide" : "Show"} Raw JSON
             </button>
 
+            <div className="flex items-center gap-2">
+              <button
+                onClick={exportToPDF}
+                disabled={exporting}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all bg-gray-100 text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+              >
+                <Download className="w-4 h-4" />
+                {exporting ? "Exporting..." : "Export PDF"}
+              </button>
+
+              <button
+                onClick={copyToClipboard}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                  copied
+                    ? "bg-green-100 text-green-700"
+                    : "bg-seedling-100 text-seedling-700 hover:bg-seedling-200"
+                }`}
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    Copy JSON
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Copy for Slack/Jira buttons */}
+          <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-200">
+            <span className="text-xs text-gray-500 self-center mr-2">
+              Export to:
+            </span>
             <button
-              onClick={copyToClipboard}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-                copied
+              onClick={copyForSlack}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                copiedSlack
                   ? "bg-green-100 text-green-700"
-                  : "bg-seedling-100 text-seedling-700 hover:bg-seedling-200"
+                  : "bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200"
               }`}
             >
-              {copied ? (
+              {copiedSlack ? (
                 <>
-                  <Check className="w-4 h-4" />
+                  <Check className="w-3.5 h-3.5" />
                   Copied!
                 </>
               ) : (
                 <>
-                  <Copy className="w-4 h-4" />
-                  Copy JSON
+                  <Hash className="w-3.5 h-3.5" />
+                  Copy for Slack
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={copyForJira}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                copiedJira
+                  ? "bg-green-100 text-green-700"
+                  : "bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200"
+              }`}
+            >
+              {copiedJira ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <Clipboard className="w-3.5 h-3.5" />
+                  Copy for Jira
                 </>
               )}
             </button>

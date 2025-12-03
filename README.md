@@ -100,14 +100,22 @@ GITHUB_TOKEN=your_github_token_here
     "priority_score": 1-5,
     "priority_justification": "Reasoning for the priority score",
     "suggested_labels": ["relevant", "github", "labels"],
-    "potential_impact": "Impact assessment for users"
+    "potential_impact": "Impact assessment for users",
+    "confidence_score": 0.0-1.0,
+    "draft_response": "AI-generated reply to post on GitHub"
 }
 ```
 
 ### Extra Mile Features 🌟
 
+- ✅ **Smart Caching**: In-memory cache reduces API costs and latency for repeated analyses
+- ✅ **AI Confidence Score**: Visual indicator (0-100%) with warnings for uncertain classifications
+- ✅ **Draft Response Generation**: AI writes a professional reply you can paste into GitHub (Agentic!)
+- ✅ **Copy for Slack**: One-click formatted export for Slack with emojis and structure
+- ✅ **Copy for Jira**: One-click export in Jira markup format
 - ✅ **Copy JSON Button**: One-click copy of analysis results to clipboard
 - ✅ **Visual Priority Tags**: Color-coded priority badges (Critical=Red → Minimal=Gray)
+- ✅ **PDF Export**: Download analysis as a professionally formatted PDF
 - ✅ **Error Handling**: User-friendly error messages with helpful suggestions
 - ✅ **Loading States**: Animated progress indicators during analysis
 - ✅ **Quick Examples**: Pre-filled example repositories for easy testing
@@ -164,7 +172,7 @@ seedling-issue-assistant/
 
 ## 🧠 Prompt Engineering Strategy
 
-> **"Agentic Approach: I used a Product Manager persona for the LLM to ensure business-relevant prioritization."**
+> **"Agentic Approach: I used a Product Manager persona for the LLM to ensure business-relevant prioritization and generate actionable draft responses."**
 
 ### 1. Persona-Based Prompting
 
@@ -173,6 +181,7 @@ The LLM is instructed to act as a **"Senior Technical Product Manager"** who:
 - Understands business impact and user urgency
 - Can classify issues based on technical and business criteria
 - Provides actionable, structured feedback
+- Generates professional draft responses for GitHub
 
 ### 2. Few-Shot Prompting
 
@@ -182,11 +191,13 @@ Two carefully crafted examples are included in every request:
 
 - Demonstrates priority 5 scoring
 - Shows bug classification and impact assessment
+- Includes confidence score (0.95) and draft response
 
 **Example 2**: Feature request (dark mode)
 
 - Demonstrates priority 2 scoring
 - Shows feature_request classification
+- Includes confidence score (0.92) and draft response
 
 ### 3. Strict JSON Schema Enforcement
 
@@ -194,7 +205,16 @@ Two carefully crafted examples are included in every request:
 - Pydantic models validate output on the backend
 - Fallback parsing handles edge cases (markdown code blocks)
 
-### 4. Priority Scoring Framework
+### 4. Confidence Scoring Framework
+
+```
+0.9-1.0: Very clear issue with obvious classification
+0.7-0.89: Reasonably confident, some ambiguity exists
+0.5-0.69: Moderate uncertainty, limited context
+Below 0.5: Low confidence, vague or conflicting info
+```
+
+### 5. Priority Scoring Framework
 
 ```
 5 (Critical): Production crashes, security vulnerabilities, data loss
@@ -203,6 +223,15 @@ Two carefully crafted examples are included in every request:
 2 (Low): Minor improvements, nice-to-haves
 1 (Minimal): Typos, cosmetic issues, low-impact docs
 ```
+
+### 6. Draft Response Generation (Agentic Feature)
+
+The AI generates professional, empathetic responses that:
+
+- Thank the user for reporting
+- Acknowledge the issue briefly
+- Indicate next steps or timeline expectations
+- Maintain a helpful, supportive tone
 
 ---
 

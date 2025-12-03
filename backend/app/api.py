@@ -62,10 +62,15 @@ async def analyze_issue(
                 error=e.message
             )
         
-        # Step 2: Analyze with LLM
+        # Step 2: Analyze with LLM (with caching)
         try:
-            analysis = await llm_service.analyze_issue(issue_data)
-            logger.info(f"Analysis complete - Priority: {analysis.priority_score}, Type: {analysis.type}")
+            analysis, was_cached = await llm_service.analyze_issue(
+                issue_data, 
+                repo_url=request.repo_url, 
+                issue_number=request.issue_number
+            )
+            cache_status = "from cache" if was_cached else "fresh analysis"
+            logger.info(f"Analysis complete ({cache_status}) - Priority: {analysis.priority_score}, Type: {analysis.type}")
         except ValueError as e:
             # LLM returned invalid JSON
             logger.error(f"LLM response parsing error: {e}")
@@ -86,7 +91,8 @@ async def analyze_issue(
         return AnalysisResponse(
             success=True,
             issue_data=issue_data,
-            analysis=analysis
+            analysis=analysis,
+            cached=was_cached
         )
         
     except Exception as e:

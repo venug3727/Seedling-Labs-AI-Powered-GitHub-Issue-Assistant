@@ -103,6 +103,16 @@ class IssueAnalysis(BaseModel):
         ...,
         description="Brief sentence on potential impact on users (especially for bugs)"
     )
+    confidence_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="AI confidence in the analysis (0.0 to 1.0)"
+    )
+    draft_response: str = Field(
+        ...,
+        description="A polite, professional draft reply the developer can post on GitHub"
+    )
 
 
 class AnalysisResponse(BaseModel):
@@ -113,6 +123,7 @@ class AnalysisResponse(BaseModel):
     issue_data: Optional[GitHubIssueData] = Field(None, description="Fetched GitHub issue data")
     analysis: Optional[IssueAnalysis] = Field(None, description="LLM-generated analysis")
     error: Optional[str] = Field(None, description="Error message if analysis failed")
+    cached: bool = Field(False, description="Whether this result was served from cache")
 
 
 class HealthResponse(BaseModel):

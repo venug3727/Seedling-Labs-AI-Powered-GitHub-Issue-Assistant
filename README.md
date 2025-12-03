@@ -126,6 +126,14 @@ GITHUB_TOKEN=your_github_token_here
 - ✅ **Loading States**: Animated progress indicators during analysis
 - ✅ **Quick Examples**: Pre-filled example repositories for easy testing
 
+### Advanced Features (Tab-Based Navigation) 🚀
+
+- ✅ **Issue Dependency Graph**: Visualizes relationships between issues by parsing references (#123, "depends on", "blocked by", etc.) with depth control and interactive visualization
+- ✅ **Duplicate Issue Detector**: Uses AI semantic analysis to find potential duplicate issues in a repository with configurable similarity thresholds
+- ✅ **Auto-Generate GitHub Labels**: Analyzes issue content and creates suggested labels directly in your GitHub repository via the API (requires user PAT)
+- ✅ **Multi-Issue Batch Analysis**: Analyze up to 10 issues at once with CSV export, priority/category statistics, and effort estimation
+- ✅ **Cross-Repository Similar Issues**: Search for similar issues across any public GitHub repository using AI-powered semantic matching
+
 ---
 
 ## 🏗️ Architecture
@@ -139,23 +147,37 @@ seedling-issue-assistant/
 ├── backend/                    # FastAPI Backend
 │   ├── app/
 │   │   ├── main.py            # Application entry point
-│   │   ├── api.py             # API routes
+│   │   ├── api.py             # API routes (core + advanced features)
 │   │   ├── models.py          # Pydantic schemas
 │   │   └── services/
 │   │       ├── github_service.py   # GitHub API integration
-│   │       └── llm_service.py      # Gemini AI integration
+│   │       ├── llm_service.py      # Gemini AI integration
+│   │       └── advanced_features.py # Advanced features service
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                   # React + Vite Frontend
 │   ├── src/
-│   │   ├── App.jsx            # Main application
+│   │   ├── App.jsx            # Main app with tab navigation
 │   │   └── components/
 │   │       ├── InputForm.jsx      # User input handling
 │   │       ├── AnalysisResult.jsx # Results display
+│   │       ├── DependencyGraph.jsx    # Issue dependency visualization
+│   │       ├── DuplicateDetector.jsx  # Duplicate issue finder
+│   │       ├── BatchAnalysis.jsx      # Multi-issue batch analysis
+│   │       ├── CrossRepoSimilar.jsx   # Cross-repo similar issues
+│   │       ├── LabelCreator.jsx       # GitHub label generator
 │   │       ├── Loader.jsx         # Loading animation
 │   │       └── ErrorDisplay.jsx   # Error handling
 │   ├── Dockerfile             # Multi-stage build
 │   └── package.json
+├── api/                        # Vercel Serverless Functions
+│   ├── analyze.py             # Issue analysis endpoint
+│   ├── dependencies.py        # Dependency graph endpoint
+│   ├── duplicates.py          # Duplicate detection endpoint
+│   ├── batch-analyze.py       # Batch analysis endpoint
+│   ├── create-labels.py       # Label creation endpoint
+│   ├── similar-cross-repo.py  # Cross-repo search endpoint
+│   └── health.py              # Health check endpoint
 ├── docker-compose.yml         # Container orchestration
 └── README.md
 ```
@@ -330,6 +352,166 @@ Health check endpoint.
   "status": "healthy",
   "service": "GitHub Issue Assistant API",
   "version": "1.0.0"
+}
+```
+
+### POST `/api/dependencies`
+
+Get issue dependency graph by parsing references.
+
+**Request Body:**
+
+```json
+{
+  "repo_url": "https://github.com/facebook/react",
+  "issue_number": 28850,
+  "max_depth": 2
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "root_issue": 28850,
+    "nodes": [
+      { "id": "28850", "title": "Issue Title", "state": "open", "url": "..." }
+    ],
+    "edges": [{ "source": "28850", "target": "28849", "type": "references" }],
+    "depth_reached": 2
+  }
+}
+```
+
+### POST `/api/duplicates`
+
+Find potential duplicate issues using AI semantic analysis.
+
+**Request Body:**
+
+```json
+{
+  "repo_url": "https://github.com/facebook/react",
+  "issue_number": 28850,
+  "threshold": 0.7
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "source_issue": { "number": 28850, "title": "..." },
+    "potential_duplicates": [
+      {
+        "issue_number": 28700,
+        "title": "...",
+        "similarity": 0.85,
+        "reasoning": "..."
+      }
+    ]
+  }
+}
+```
+
+### POST `/api/batch-analyze`
+
+Analyze multiple issues at once (max 10).
+
+**Request Body:**
+
+```json
+{
+  "repo_url": "https://github.com/facebook/react",
+  "issue_numbers": [28850, 28849, 28848]
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "issues": [
+      { "issue_number": 28850, "priority": "high", "category": "bug", "effort": "4h", "key_points": [...] }
+    ],
+    "summary": {
+      "total_analyzed": 3,
+      "by_priority": { "high": 1, "medium": 2 },
+      "by_category": { "bug": 2, "feature": 1 }
+    }
+  }
+}
+```
+
+### POST `/api/create-labels`
+
+Create labels in a GitHub repository (requires user PAT).
+
+**Request Body:**
+
+```json
+{
+  "repo_url": "https://github.com/owner/repo",
+  "labels": ["bug", "high-priority", "needs-review"],
+  "github_token": "ghp_xxx..."
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "created": ["high-priority"],
+    "existing": ["bug"],
+    "failed": []
+  }
+}
+```
+
+### POST `/api/similar-cross-repo`
+
+Find similar issues in another repository.
+
+**Request Body:**
+
+```json
+{
+  "source_repo_url": "https://github.com/facebook/react",
+  "source_issue_number": 28850,
+  "target_repo_url": "https://github.com/vuejs/vue"
+}
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "source_issue": {
+      "number": 28850,
+      "title": "...",
+      "repo": "facebook/react"
+    },
+    "similar_issues": [
+      {
+        "issue_number": 12500,
+        "title": "...",
+        "url": "...",
+        "similarity": 0.75,
+        "reasoning": "..."
+      }
+    ],
+    "target_repo": "vuejs/vue"
+  }
 }
 ```
 

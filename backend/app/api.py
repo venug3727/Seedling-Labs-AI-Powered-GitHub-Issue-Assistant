@@ -3,15 +3,54 @@ API Routes for the GitHub Issue Assistant.
 
 Defines all HTTP endpoints:
 - POST /api/analyze - Main analysis endpoint
+- POST /api/dependencies - Issue dependency graph
+- POST /api/duplicates - Find duplicate issues
+- POST /api/create-labels - Create GitHub labels
+- POST /api/batch-analyze - Analyze multiple issues
+- POST /api/similar-cross-repo - Find similar issues across repos
 - GET /api/health - Health check endpoint
 """
 
 import logging
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field
 
 from app.models import IssueRequest, AnalysisResponse, HealthResponse
 from app.services.github_service import get_github_service, GitHubService, GitHubServiceError
 from app.services.llm_service import get_llm_service, LLMService
+from app.services.advanced_features import get_advanced_features_service, AdvancedFeaturesService
+
+
+# Request/Response models for new endpoints
+class DependencyRequest(BaseModel):
+    repo_url: str
+    issue_number: int
+    depth: int = Field(default=1, ge=1, le=3)
+
+
+class DuplicateRequest(BaseModel):
+    repo_url: str
+    issue_number: int
+    issue_title: str
+    issue_body: Optional[str] = ""
+
+
+class CreateLabelsRequest(BaseModel):
+    repo_url: str
+    labels: List[str]
+    github_token: str
+
+
+class BatchAnalyzeRequest(BaseModel):
+    repo_url: str
+    issue_numbers: List[int] = Field(..., min_length=1, max_length=10)
+
+
+class CrossRepoRequest(BaseModel):
+    issue_title: str
+    issue_body: Optional[str] = ""
+    exclude_repo: Optional[str] = ""
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -148,3 +187,124 @@ async def detailed_health_check(
             "llm_service": "healthy" if llm_initialized else "unhealthy (check GEMINI_API_KEY)"
         }
     }
+
+
+# ==================== ADVANCED FEATURES ENDPOINTS ====================
+
+def _parse_repo_url(repo_url: str) -> tuple[str, str]:
+    """Extract owner and repo from URL."""
+    parts = repo_url.strip().rstrip("/").split("/")
+    return parts[-2], parts[-1]
+
+
+@router.post("/dependencies")
+async def get_issue_dependencies(
+    request: DependencyRequest,
+    advanced_service: AdvancedFeaturesService = Depends(get_advanced_features_service)
+) -> dict:
+    """
+    Get dependency graph for an issue.
+    Parses issue references (#123, fixes #456, etc.) and builds a graph.
+    """
+    logger.info(f"Building dependency graph for {request.repo_url} #{request.issue_number}")
+    
+    try:
+        owner, repo = _parse_repo_url(request.repo_url)
+        graph = await advanced_service.build_dependency_graph(
+            owner, repo, request.issue_number, request.depth
+        )
+        return {"success": True, "data": graph}
+    except Exception as e:
+        logger.error(f"Dependency graph error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/duplicates")
+async def find_duplicates(
+    request: DuplicateRequest,
+    advanced_service: AdvancedFeaturesService = Depends(get_advanced_features_service)
+) -> dict:
+    """
+    Find potential duplicate issues in the repository.
+    Uses semantic similarity to identify duplicates.
+    """
+    logger.info(f"Finding duplicates for {request.repo_url} #{request.issue_number}")
+    
+    try:
+        owner, repo = _parse_repo_url(request.repo_url)
+        duplicates = await advanced_service.find_duplicate_issues(
+            owner, repo, request.issue_number,
+            request.issue_title, request.issue_body or ""
+        )
+        return {"success": True, "data": duplicates}
+    except Exception as e:
+        logger.error(f"Duplicate detection error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/create-labels")
+async def create_labels(
+    request: CreateLabelsRequest,
+    advanced_service: AdvancedFeaturesService = Depends(get_advanced_features_service)
+) -> dict:
+    """
+    Create labels on GitHub repository.
+    Requires user's GitHub Personal Access Token.
+    """
+    logger.info(f"Creating labels for {request.repo_url}")
+    
+    try:
+        owner, repo = _parse_repo_url(request.repo_url)
+        results = await advanced_service.create_github_labels(
+            owner, repo, request.labels, request.github_token
+        )
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"Label creation error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/batch-analyze")
+async def batch_analyze(
+    request: BatchAnalyzeRequest,
+    advanced_service: AdvancedFeaturesService = Depends(get_advanced_features_service),
+    llm_service: LLMService = Depends(get_llm_service)
+) -> dict:
+    """
+    Analyze multiple issues at once.
+    Returns individual analyses and aggregate statistics.
+    """
+    logger.info(f"Batch analyzing {len(request.issue_numbers)} issues from {request.repo_url}")
+    
+    try:
+        owner, repo = _parse_repo_url(request.repo_url)
+        results = await advanced_service.batch_analyze_issues(
+            owner, repo, request.issue_numbers, llm_service
+        )
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"Batch analysis error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/similar-cross-repo")
+async def find_similar_cross_repo(
+    request: CrossRepoRequest,
+    advanced_service: AdvancedFeaturesService = Depends(get_advanced_features_service)
+) -> dict:
+    """
+    Find similar issues across other GitHub repositories.
+    Uses GitHub Search API with semantic keywords.
+    """
+    logger.info(f"Finding similar issues across repos for: {request.issue_title[:50]}...")
+    
+    try:
+        results = await advanced_service.find_similar_issues_cross_repo(
+            request.issue_title,
+            request.issue_body or "",
+            request.exclude_repo or ""
+        )
+        return {"success": True, "data": results}
+    except Exception as e:
+        logger.error(f"Cross-repo search error: {e}")
+        return {"success": False, "error": str(e)}

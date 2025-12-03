@@ -12,6 +12,12 @@ An intelligent web application that analyzes GitHub issues using AI to provide s
 
 **🚀 Try it now: [https://seedlinglabs-ai-github-issue-assistant.vercel.app/](https://seedlinglabs-ai-github-issue-assistant.vercel.app/)**
 
+## 📊 Project Presentation
+
+**📑 View the pitch deck: [Seedling Labs Pitch.pptx](./Seedling%20Labs%20Pitch.pptx)**
+
+> Download the PowerPoint presentation for a visual overview of the project architecture, features, and technical decisions.
+
 ---
 
 ## 🚀 Quick Start (< 5 minutes)

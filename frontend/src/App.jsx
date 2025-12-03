@@ -96,17 +96,17 @@ function App() {
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-3 sm:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-seedling-100 rounded-lg">
-                <Sprout className="w-6 h-6 text-seedling-600" />
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="p-1.5 sm:p-2 bg-seedling-100 rounded-lg flex-shrink-0">
+                <Sprout className="w-5 h-5 sm:w-6 sm:h-6 text-seedling-600" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-xl font-bold text-gray-900 truncate">
                   GitHub Issue Assistant
                 </h1>
-                <p className="text-sm text-gray-500">
+                <p className="text-xs sm:text-sm text-gray-500 hidden xs:block">
                   AI-Powered Analysis by Seedling Labs
                 </p>
               </div>
@@ -120,21 +120,20 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
         {/* Hero Section - Only show when no results */}
         {!result && !isLoading && !error && (
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-seedling-100 text-seedling-700 rounded-full text-sm font-medium mb-4">
-              <Github className="w-4 h-4" />
+          <div className="text-center mb-6 sm:mb-8">
+            <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-seedling-100 text-seedling-700 rounded-full text-xs sm:text-sm font-medium mb-3 sm:mb-4">
+              <Github className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               Public Repositories Only
             </div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-3">
+            <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 mb-2 sm:mb-3 px-2">
               Analyze Any GitHub Issue with AI
             </h2>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+            <p className="text-sm sm:text-base md:text-lg text-gray-600 max-w-2xl mx-auto px-2">
               Get instant insights, priority scoring, and smart label
-              suggestions for any public GitHub issue. Perfect for triaging and
-              understanding complex issues quickly.
+              suggestions for any public GitHub issue.
             </p>
           </div>
         )}
@@ -180,7 +179,7 @@ function App() {
 
         {/* Features Section - Only show on initial state */}
         {!result && !isLoading && !error && (
-          <div className="mt-12 grid md:grid-cols-3 gap-6">
+          <div className="mt-8 sm:mt-12 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-6">
             <FeatureCard
               icon={Target}
               title="Priority Scoring"
@@ -202,13 +201,13 @@ function App() {
 
       {/* Footer */}
       <footer className="border-t border-gray-200 bg-white mt-auto">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2 text-gray-500 text-sm">
-              <Sprout className="w-4 h-4 text-seedling-500" />
+        <div className="max-w-5xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+          <div className="flex flex-col items-center justify-center gap-2 sm:gap-4 text-center">
+            <div className="flex items-center gap-2 text-gray-500 text-xs sm:text-sm">
+              <Sprout className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-seedling-500" />
               <span>Seedling Labs Engineering Craft Case</span>
             </div>
-            <div className="text-sm text-gray-400">
+            <div className="text-xs sm:text-sm text-gray-400">
               Built with React, FastAPI, and Gemini AI
             </div>
           </div>
@@ -222,12 +221,14 @@ function App() {
  * Feature Card Component
  */
 const FeatureCard = ({ icon: Icon, title, description }) => (
-  <div className="bg-white rounded-xl p-6 shadow-md hover:shadow-lg transition-shadow">
-    <div className="p-3 bg-seedling-100 rounded-lg w-fit mb-3">
-      <Icon className="w-6 h-6 text-seedling-600" />
+  <div className="bg-white rounded-xl p-4 sm:p-6 shadow-md hover:shadow-lg transition-shadow">
+    <div className="p-2 sm:p-3 bg-seedling-100 rounded-lg w-fit mb-2 sm:mb-3">
+      <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-seedling-600" />
     </div>
-    <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
-    <p className="text-sm text-gray-600">{description}</p>
+    <h3 className="font-semibold text-gray-900 mb-1 sm:mb-2 text-sm sm:text-base">
+      {title}
+    </h3>
+    <p className="text-xs sm:text-sm text-gray-600">{description}</p>
   </div>
 );
 

@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "cd frontend && npm install",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "functions": {
+    "api/*.py": {
+      "runtime": "@vercel/python@4.3.1",
+      "maxDuration": 60
+    }
+  },
+  "env": {
+    "GEMINI_API_KEY": "@gemini_api_key",
+    "GITHUB_TOKEN": "@github_token"
+  }
+}

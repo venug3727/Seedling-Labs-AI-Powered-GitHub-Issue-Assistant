@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Docker files (not needed for Vercel)
+backend/
+docker-compose.yml
+Dockerfile
+*.dockerfile
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+.pytest_cache/
+coverage/
+.nyc_output/
+
+# OS files
+.DS_Store
+Thumbs.db

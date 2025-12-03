@@ -331,6 +331,79 @@ npm test
 
 ---
 
+## ☁️ Deploy to Vercel
+
+### One-Click Deploy
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/seedling-issue-assistant)
+
+### Manual Deployment Steps
+
+**1. Install Vercel CLI**
+
+```bash
+npm install -g vercel
+```
+
+**2. Login to Vercel**
+
+```bash
+vercel login
+```
+
+**3. Deploy from project root**
+
+```bash
+cd seedling-issue-assistant
+vercel
+```
+
+**4. Set Environment Variables in Vercel Dashboard**
+
+- Go to your project settings in [Vercel Dashboard](https://vercel.com/dashboard)
+- Navigate to **Settings → Environment Variables**
+- Add the following variables:
+
+| Name             | Value                        | Environment                      |
+| ---------------- | ---------------------------- | -------------------------------- |
+| `GEMINI_API_KEY` | Your Gemini API key          | Production, Preview, Development |
+| `GITHUB_TOKEN`   | Your GitHub token (optional) | Production, Preview, Development |
+
+**5. Redeploy**
+
+```bash
+vercel --prod
+```
+
+### Project Structure for Vercel
+
+```
+seedling-issue-assistant/
+├── api/                        # Vercel Serverless Functions
+│   ├── analyze.py              # POST /api/analyze endpoint
+│   ├── health.py               # GET /api/health endpoint
+│   └── requirements.txt        # Python dependencies
+├── frontend/                   # React Frontend (built by Vercel)
+│   ├── src/
+│   └── package.json
+├── vercel.json                 # Vercel configuration
+└── README.md
+```
+
+### Environment Variables on Vercel
+
+You can also use Vercel CLI to add secrets:
+
+```bash
+# Add Gemini API key
+vercel env add GEMINI_API_KEY
+
+# Add GitHub token (optional)
+vercel env add GITHUB_TOKEN
+```
+
+---
+
 ---
 
 ## 🙏 Acknowledgments

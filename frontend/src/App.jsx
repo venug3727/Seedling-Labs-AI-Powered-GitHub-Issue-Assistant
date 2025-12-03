@@ -22,8 +22,8 @@ import AnalysisResult from "./components/AnalysisResult";
 import Loader from "./components/Loader";
 import ErrorDisplay from "./components/ErrorDisplay";
 
-// API Configuration
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// API Configuration - Use relative URL for Vercel, or localhost for development
+const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
 function App() {
   const [isLoading, setIsLoading] = useState(false);

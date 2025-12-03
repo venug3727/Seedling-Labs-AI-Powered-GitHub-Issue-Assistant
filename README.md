@@ -39,6 +39,43 @@ docker-compose up --build
 
 That's it! 🎉 The application is now running.
 
+### Environment Variables Setup
+
+Create a `.env` file in the root directory with the following variables:
+
+```env
+# ===========================================
+# GitHub Issue Assistant - Environment Config
+# ===========================================
+
+# ✅ REQUIRED: Google Gemini API Key
+# Get your free key at: https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=your_gemini_api_key_here
+
+# ❌ OPTIONAL: GitHub Personal Access Token
+# Increases rate limit from 60 to 5000 requests/hour
+# Create at: https://github.com/settings/tokens
+# Required scopes: public_repo (read-only)
+GITHUB_TOKEN=your_github_token_here
+```
+
+#### How to Get Your API Keys:
+
+**1. Gemini API Key (Required)**
+
+- Go to [Google AI Studio](https://aistudio.google.com/app/apikey)
+- Sign in with your Google account
+- Click "Create API Key"
+- Copy the key and paste it in your `.env` file
+
+**2. GitHub Token (Optional but Recommended)**
+
+- Go to [GitHub Settings → Tokens](https://github.com/settings/tokens)
+- Click "Generate new token (classic)"
+- Give it a name like "Issue Assistant"
+- Select scope: `public_repo`
+- Generate and copy the token to your `.env` file
+
 ---
 
 ## 📋 Features

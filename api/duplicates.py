@@ -2,20 +2,51 @@
 Vercel Serverless Function for Duplicate Detection.
 Endpoint: POST /api/duplicates
 
-Finds potential duplicate issues using semantic similarity.
+Uses same prompt as backend/app/services/advanced_features.py
 """
 
 import json
 import os
 import re
-import logging
 from http.server import BaseHTTPRequestHandler
-
 import httpx
-import google.generativeai as genai
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+# Same prompt as backend advanced_features.py find_duplicate_issues()
+DUPLICATE_PROMPT_TEMPLATE = """Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
+
+Issue 1:
+Title: {source_title}
+Body: {source_body}
+
+Issue 2:
+Title: {target_title}
+Body: {target_body}
+
+Consider:
+- Are they reporting the same problem?
+- Are they requesting the same feature?
+- Do they have similar root causes?
+
+Return ONLY a number from 0 to 100. No explanation."""
+
+
+def call_gemini(prompt: str, api_key: str) -> str:
+    """Call Gemini and return raw text response."""
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 50}
+    }
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(f"{GEMINI_API_URL}?key={api_key}", json=payload, headers={"Content-Type": "application/json"})
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except:
+            return ""
 
 
 class handler(BaseHTTPRequestHandler):
@@ -39,107 +70,89 @@ class handler(BaseHTTPRequestHandler):
 
             repo_url = data.get("repo_url", "")
             issue_number = data.get("issue_number")
-            issue_title = data.get("issue_title", "")
-            issue_body = data.get("issue_body", "")
+            threshold = data.get("threshold", 0.5)  # Same default as backend (50%)
+
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                self.wfile.write(json.dumps({"success": False, "error": "GEMINI_API_KEY not configured"}).encode())
+                return
 
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", repo_url)
             if not match:
-                self.wfile.write(json.dumps({
-                    "success": False,
-                    "error": "Invalid GitHub URL"
-                }).encode())
+                self.wfile.write(json.dumps({"success": False, "error": "Invalid GitHub URL"}).encode())
                 return
 
             owner, repo = match.groups()
-
-            # Fetch recent issues
-            github_token = os.getenv("GITHUB_TOKEN")
+            github_token = os.getenv("GITHUB_TOKEN", "")
             headers = {"Accept": "application/vnd.github.v3+json"}
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
 
-            url = f"https://api.github.com/repos/{owner}/{repo}/issues?state=all&per_page=50"
-            
             with httpx.Client(timeout=30) as client:
-                response = client.get(url, headers=headers)
-                if response.status_code != 200:
-                    self.wfile.write(json.dumps({
-                        "success": False,
-                        "error": "Failed to fetch issues"
-                    }).encode())
+                # Fetch source issue
+                resp = client.get(f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}", headers=headers)
+                if resp.status_code != 200:
+                    self.wfile.write(json.dumps({"success": False, "error": "Issue not found"}).encode())
                     return
-                
-                issues = response.json()
+                source = resp.json()
+
+                # Fetch recent issues (same limit=50 as backend)
+                resp = client.get(f"https://api.github.com/repos/{owner}/{repo}/issues?state=all&per_page=50", headers=headers)
+                issues = resp.json() if resp.status_code == 200 else []
 
             # Filter out current issue
-            other_issues = [i for i in issues if i.get("number") != issue_number][:20]
+            other_issues = [i for i in issues if i.get("number") != issue_number]
 
             if not other_issues:
                 self.wfile.write(json.dumps({
                     "success": True,
-                    "data": []
+                    "data": {"source_issue": {"number": issue_number, "title": source.get("title")}, "potential_duplicates": []}
                 }).encode())
                 return
 
-            # Setup Gemini
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                self.wfile.write(json.dumps({
-                    "success": False,
-                    "error": "GEMINI_API_KEY not configured"
-                }).encode())
-                return
+            source_title = source.get("title", "")
+            source_body = (source.get("body") or "")[:500]
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
-
-            current_summary = f"Title: {issue_title}\nBody: {issue_body[:500]}"
             candidates = []
+            
+            # Compare with top 20 issues (same as backend)
+            for issue in other_issues[:20]:
+                target_title = issue.get("title", "")
+                target_body = (issue.get("body") or "")[:500]
+                
+                # Use same prompt as backend
+                prompt = DUPLICATE_PROMPT_TEMPLATE.format(
+                    source_title=source_title,
+                    source_body=source_body,
+                    target_title=target_title,
+                    target_body=target_body
+                )
+                
+                score_text = call_gemini(prompt, api_key)
+                
+                # Extract number from response (same logic as backend)
+                score_match = re.search(r'\d+', score_text)
+                if score_match:
+                    score = int(score_match.group()) / 100.0
+                    if score >= threshold:  # Only include if above threshold
+                        candidates.append({
+                            "issue_number": issue.get("number"),
+                            "title": target_title,
+                            "similarity_score": round(score, 2),
+                            "html_url": issue.get("html_url", ""),
+                            "state": issue.get("state", "unknown")
+                        })
 
-            for issue in other_issues:
-                other_title = issue.get("title", "")
-                other_body = (issue.get("body") or "")[:500]
-                other_summary = f"Title: {other_title}\nBody: {other_body}"
-
-                prompt = f"""Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
-
-Issue 1:
-{current_summary}
-
-Issue 2:
-{other_summary}
-
-Consider: Are they reporting the same problem? Are they requesting the same feature?
-Return ONLY a number from 0 to 100. No explanation."""
-
-                try:
-                    response = model.generate_content(prompt)
-                    score_text = response.text.strip()
-                    score_match = re.search(r'\d+', score_text)
-                    if score_match:
-                        score = int(score_match.group()) / 100.0
-                        if score >= 0.5:
-                            candidates.append({
-                                "issue_number": issue.get("number"),
-                                "title": other_title,
-                                "similarity_score": round(score, 2),
-                                "html_url": issue.get("html_url", ""),
-                                "state": issue.get("state", "unknown")
-                            })
-                except Exception as e:
-                    logger.warning(f"Similarity check failed: {e}")
-                    continue
-
+            # Sort by similarity score (same as backend)
             candidates.sort(key=lambda x: x["similarity_score"], reverse=True)
 
             self.wfile.write(json.dumps({
                 "success": True,
-                "data": candidates[:5]
+                "data": {
+                    "source_issue": {"number": issue_number, "title": source.get("title")},
+                    "potential_duplicates": candidates[:5]  # Return top 5 (same as backend)
+                }
             }).encode())
 
         except Exception as e:
-            logger.error(f"Error: {e}")
-            self.wfile.write(json.dumps({
-                "success": False,
-                "error": str(e)
-            }).encode())
+            self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())

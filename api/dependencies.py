@@ -2,43 +2,53 @@
 Vercel Serverless Function for Issue Dependencies.
 Endpoint: POST /api/dependencies
 
-Parses issue references (#123, fixes #456) and builds dependency graph.
+Uses same reference parsing logic as backend/app/services/advanced_features.py
 """
 
 import json
 import os
 import re
-import logging
 from http.server import BaseHTTPRequestHandler
-
 import httpx
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 
 
-def parse_issue_references(text: str) -> list:
-    """Parse issue references from text."""
+def parse_issue_references(text):
+    """
+    Parse issue references from text.
+    Same patterns as backend advanced_features.py parse_issue_references()
+    """
     references = []
+    
+    # Same patterns as backend
     patterns = [
+        # fixes #123, closes #123, resolves #123
         (r'(?:fix(?:es|ed)?|clos(?:es|ed)?|resolv(?:es|ed)?)\s+#(\d+)', 'fixes'),
+        # blocked by #123, depends on #123
         (r'(?:blocked\s+by|depends\s+on)\s+#(\d+)', 'blocked_by'),
+        # blocks #123
         (r'blocks?\s+#(\d+)', 'blocks'),
+        # related to #123, see #123, ref #123
         (r'(?:related\s+to|see|ref(?:erence)?s?)\s+#(\d+)', 'mentions'),
+        # plain #123 (lowest priority)
         (r'(?<![/\w])#(\d+)(?!\d)', 'mentions'),
     ]
     
     seen = set()
+    if not text:
+        return references
+        
     for pattern, ref_type in patterns:
         for match in re.finditer(pattern, text, re.IGNORECASE):
             issue_num = int(match.group(1))
             if issue_num not in seen:
                 seen.add(issue_num)
+                # Get context (surrounding text) - same as backend
                 start = max(0, match.start() - 30)
                 end = min(len(text), match.end() + 30)
                 context = text[start:end].strip()
+                
                 references.append({
                     "issue_number": issue_num,
                     "reference_type": ref_type,
@@ -46,19 +56,6 @@ def parse_issue_references(text: str) -> list:
                 })
     
     return references
-
-
-def fetch_github_issue(owner: str, repo: str, issue_number: int, headers: dict) -> dict:
-    """Fetch a single issue from GitHub."""
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{issue_number}"
-    try:
-        with httpx.Client(timeout=15) as client:
-            response = client.get(url, headers=headers)
-            if response.status_code == 200:
-                return response.json()
-    except Exception as e:
-        logger.error(f"Failed to fetch issue #{issue_number}: {e}")
-    return None
 
 
 class handler(BaseHTTPRequestHandler):
@@ -82,20 +79,17 @@ class handler(BaseHTTPRequestHandler):
 
             repo_url = data.get("repo_url", "")
             issue_number = data.get("issue_number")
-            depth = min(data.get("depth", 1), 3)
+            max_depth = min(data.get("max_depth", 1), 3)  # Same default=1 and max=3 as backend
 
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", repo_url)
             if not match:
-                self.wfile.write(json.dumps({
-                    "success": False,
-                    "error": "Invalid GitHub URL"
-                }).encode())
+                self.wfile.write(json.dumps({"success": False, "error": "Invalid GitHub URL"}).encode())
                 return
 
             owner, repo = match.groups()
-
-            github_token = os.getenv("GITHUB_TOKEN")
-            headers = {"Accept": "application/vnd.github.v3+json"}
+            
+            github_token = os.getenv("GITHUB_TOKEN", "")
+            headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Seedling-Issue-Assistant/1.0"}
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
 
@@ -103,18 +97,24 @@ class handler(BaseHTTPRequestHandler):
             edges = []
             visited = set()
 
-            def process_issue(num: int, current_depth: int):
-                if num in visited or current_depth > depth:
+            def fetch_and_process(num, current_depth):
+                """Recursively fetch issues and build graph (same logic as backend)."""
+                if num in visited or current_depth > max_depth:
                     return
                 visited.add(num)
 
-                issue = fetch_github_issue(owner, repo, num, headers)
-                if not issue:
-                    return
+                url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues/{num}"
+                with httpx.Client(timeout=15) as client:
+                    resp = client.get(url, headers=headers)
+                    if resp.status_code != 200:
+                        return
+                    issue = resp.json()
 
+                # Parse references from title and body (same as backend)
                 text = f"{issue.get('title', '')} {issue.get('body', '') or ''}"
                 references = parse_issue_references(text)
 
+                # Add node (same structure as backend)
                 nodes.append({
                     "id": str(num),
                     "issue_number": num,
@@ -124,6 +124,7 @@ class handler(BaseHTTPRequestHandler):
                     "is_root": num == issue_number
                 })
 
+                # Add edges and recursively process (same as backend)
                 for ref in references:
                     edges.append({
                         "source": str(num),
@@ -131,11 +132,11 @@ class handler(BaseHTTPRequestHandler):
                         "type": ref["reference_type"],
                         "context": ref["context"]
                     })
+                    
+                    if current_depth < max_depth:
+                        fetch_and_process(ref["issue_number"], current_depth + 1)
 
-                    if current_depth < depth:
-                        process_issue(ref["issue_number"], current_depth + 1)
-
-            process_issue(issue_number, 0)
+            fetch_and_process(issue_number, 0)
 
             self.wfile.write(json.dumps({
                 "success": True,
@@ -149,8 +150,4 @@ class handler(BaseHTTPRequestHandler):
             }).encode())
 
         except Exception as e:
-            logger.error(f"Error: {e}")
-            self.wfile.write(json.dumps({
-                "success": False,
-                "error": str(e)
-            }).encode())
+            self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())

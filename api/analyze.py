@@ -11,10 +11,30 @@ import json
 import os
 import logging
 import re
+import hashlib
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 
 import httpx
-from cache_utils import generate_cache_key, cache_get, cache_set
+
+# In-memory cache (works in warm Vercel instances)
+_cache = {}
+_cache_ttl = timedelta(minutes=60)
+
+def generate_cache_key(*args):
+    raw_key = ":".join(str(arg) for arg in args)
+    return hashlib.md5(raw_key.encode()).hexdigest()
+
+def cache_get(key):
+    if key in _cache:
+        value, cached_at = _cache[key]
+        if datetime.now() - cached_at < _cache_ttl:
+            return value
+        del _cache[key]
+    return None
+
+def cache_set(key, value):
+    _cache[key] = (value, datetime.now())
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

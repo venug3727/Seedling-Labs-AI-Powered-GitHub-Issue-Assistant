@@ -10,7 +10,11 @@ const ErrorDisplay = ({ error, onRetry }) => {
   // Determine error type and provide helpful message
   const getErrorDetails = (errorMessage) => {
     // Ensure errorMessage is a string
-    const msg = (typeof errorMessage === 'string' ? errorMessage : String(errorMessage || 'Unknown error')).toLowerCase();
+    const msg = (
+      typeof errorMessage === "string"
+        ? errorMessage
+        : String(errorMessage || "Unknown error")
+    ).toLowerCase();
 
     if (msg.includes("not found") || msg.includes("404")) {
       return {

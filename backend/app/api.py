@@ -213,7 +213,8 @@ async def get_issue_dependencies(
         graph = await advanced_service.build_dependency_graph(
             owner, repo, request.issue_number, request.depth
         )
-        return {"success": True, "data": graph}
+        # graph already includes 'cached' field from the service
+        return {"success": True, "data": graph, "cached": graph.get("cached", False)}
     except Exception as e:
         logger.error(f"Dependency graph error: {e}")
         return {"success": False, "error": str(e)}
@@ -232,11 +233,11 @@ async def find_duplicates(
     
     try:
         owner, repo = _parse_repo_url(request.repo_url)
-        duplicates = await advanced_service.find_duplicate_issues(
+        duplicates, was_cached = await advanced_service.find_duplicate_issues(
             owner, repo, request.issue_number,
             request.issue_title, request.issue_body or ""
         )
-        return {"success": True, "data": duplicates}
+        return {"success": True, "data": duplicates, "cached": was_cached}
     except Exception as e:
         logger.error(f"Duplicate detection error: {e}")
         return {"success": False, "error": str(e)}
@@ -299,12 +300,12 @@ async def find_similar_cross_repo(
     logger.info(f"Finding similar issues across repos for: {request.issue_title[:50]}...")
     
     try:
-        results = await advanced_service.find_similar_issues_cross_repo(
+        results, was_cached = await advanced_service.find_similar_issues_cross_repo(
             request.issue_title,
             request.issue_body or "",
             request.exclude_repo or ""
         )
-        return {"success": True, "data": results}
+        return {"success": True, "data": results, "cached": was_cached}
     except Exception as e:
         logger.error(f"Cross-repo search error: {e}")
         return {"success": False, "error": str(e)}

@@ -4,6 +4,7 @@ Endpoint: POST /api/analyze
 
 Uses direct Gemini REST API calls (no SDK) for smaller bundle size.
 Same prompts as backend/app/services/llm_service.py
+Includes smart caching for cost & latency optimization.
 """
 
 import json
@@ -13,6 +14,7 @@ import re
 from http.server import BaseHTTPRequestHandler
 
 import httpx
+from _cache import generate_cache_key, cache_get, cache_set
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -208,6 +210,15 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"success": False, "error": issue_data["error"]}).encode())
                 return
 
+            # Check cache first
+            cache_key = generate_cache_key("analyze", repo_url, issue_number, issue_data.get("created_at", ""))
+            cached_analysis = cache_get(cache_key)
+            
+            if cached_analysis:
+                logger.info(f"Cache HIT for {repo_url} #{issue_number}")
+                self.wfile.write(json.dumps({"success": True, "issue_data": issue_data, "analysis": cached_analysis, "cached": True}).encode())
+                return
+
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
                 self.wfile.write(json.dumps({"success": False, "error": "GEMINI_API_KEY not configured"}).encode())
@@ -219,6 +230,10 @@ class handler(BaseHTTPRequestHandler):
             if "error" in analysis:
                 self.wfile.write(json.dumps({"success": False, "issue_data": issue_data, "error": analysis["error"]}).encode())
                 return
+
+            # Store in cache
+            cache_set(cache_key, analysis)
+            logger.info(f"Cache SET for {repo_url} #{issue_number}")
 
             self.wfile.write(json.dumps({"success": True, "issue_data": issue_data, "analysis": analysis, "cached": False}).encode())
 

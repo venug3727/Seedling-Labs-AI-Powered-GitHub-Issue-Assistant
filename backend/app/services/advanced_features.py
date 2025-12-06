@@ -7,13 +7,17 @@ Features:
 3. Auto-Generate GitHub Labels - Create labels via API
 4. Multi-Issue Batch Analysis - Analyze multiple issues at once
 5. Cross-Repo Similar Issues - Find similar issues in other repos
+
+Includes smart caching for cost & latency optimization.
 """
 
 import re
 import os
 import logging
+import hashlib
 from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import httpx
 import google.generativeai as genai
@@ -22,6 +26,52 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 REQUEST_TIMEOUT = 30.0
+
+
+# ============================================================================
+# SMART CACHE - Cost & Latency Optimization for Advanced Features
+# ============================================================================
+class AdvancedFeaturesCache:
+    """
+    In-memory cache for advanced features results.
+    Saves API costs and reduces latency for repeated analyses.
+    """
+    def __init__(self, ttl_minutes: int = 60):
+        self._cache: Dict[str, Tuple[any, datetime]] = {}
+        self._ttl = timedelta(minutes=ttl_minutes)
+    
+    def _generate_key(self, feature: str, *args) -> str:
+        """Generate a unique cache key for any feature."""
+        raw_key = f"{feature}:" + ":".join(str(arg) for arg in args)
+        return hashlib.md5(raw_key.encode()).hexdigest()
+    
+    def get(self, feature: str, *args) -> Optional[any]:
+        """Retrieve cached result if available and not expired."""
+        key = self._generate_key(feature, *args)
+        if key in self._cache:
+            result, cached_at = self._cache[key]
+            if datetime.now() - cached_at < self._ttl:
+                logger.info(f"Cache HIT for {feature}")
+                return result
+            else:
+                del self._cache[key]
+                logger.info(f"Cache EXPIRED for {feature}")
+        return None
+    
+    def set(self, feature: str, result: any, *args):
+        """Store result in cache."""
+        key = self._generate_key(feature, *args)
+        self._cache[key] = (result, datetime.now())
+        logger.info(f"Cache SET for {feature}")
+    
+    def clear(self):
+        """Clear all cached entries."""
+        self._cache.clear()
+        logger.info("Advanced features cache cleared")
+
+
+# Global cache instance for advanced features
+_advanced_cache = AdvancedFeaturesCache(ttl_minutes=60)
 
 
 @dataclass
@@ -152,6 +202,11 @@ class AdvancedFeaturesService:
         Returns:
             Dict with nodes and edges for visualization
         """
+        # Check cache first
+        cached_result = _advanced_cache.get("dependency_graph", owner, repo, issue_number, depth)
+        if cached_result:
+            return {**cached_result, "cached": True}
+        
         nodes = []
         edges = []
         visited = set()
@@ -197,13 +252,18 @@ class AdvancedFeaturesService:
         
         await process_issue(issue_number, 0)
         
-        return {
+        result = {
             "nodes": nodes,
             "edges": edges,
             "root_issue": issue_number,
             "total_nodes": len(nodes),
             "total_edges": len(edges)
         }
+        
+        # Cache the result
+        _advanced_cache.set("dependency_graph", result, owner, repo, issue_number, depth)
+        
+        return {**result, "cached": False}
 
     # ==================== 2. DUPLICATE DETECTOR ====================
     
@@ -215,23 +275,31 @@ class AdvancedFeaturesService:
         issue_title: str,
         issue_body: str,
         limit: int = 50
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], bool]:
         """
         Find potential duplicate issues in the repository.
         Uses semantic similarity via Gemini.
+        
+        Returns:
+            Tuple of (candidates list, was_cached boolean)
         """
+        # Check cache first
+        cached_result = _advanced_cache.get("duplicates", owner, repo, issue_number)
+        if cached_result:
+            return cached_result, True
+        
         # Fetch recent issues
         url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/issues?state=all&per_page={limit}"
         issues = await self._make_github_request(url)
         
         if not issues:
-            return []
+            return [], False
         
         # Filter out the current issue
         other_issues = [i for i in issues if i.get("number") != issue_number]
         
         if not other_issues or not self.model:
-            return []
+            return [], False
         
         # Prepare issue summaries for comparison
         current_summary = f"Title: {issue_title}\nBody: {(issue_body or '')[:500]}"
@@ -280,7 +348,12 @@ Return ONLY a number from 0 to 100. No explanation."""
         # Sort by similarity score
         candidates.sort(key=lambda x: x["similarity_score"], reverse=True)
         
-        return candidates[:5]  # Return top 5
+        result = candidates[:5]  # Return top 5
+        
+        # Cache the result
+        _advanced_cache.set("duplicates", result, owner, repo, issue_number)
+        
+        return result, False
 
     # ==================== 3. AUTO-GENERATE LABELS ====================
     
@@ -466,12 +539,20 @@ Return ONLY a number from 0 to 100. No explanation."""
         issue_title: str,
         issue_body: str,
         exclude_repo: str = ""
-    ) -> List[Dict]:
+    ) -> Tuple[List[Dict], bool]:
         """
         Search for similar issues across popular GitHub repositories.
         
         Uses GitHub Search API to find related issues.
+        
+        Returns:
+            Tuple of (results list, was_cached boolean)
         """
+        # Check cache first
+        cached_result = _advanced_cache.get("cross_repo", issue_title, issue_body[:200] if issue_body else "", exclude_repo)
+        if cached_result:
+            return cached_result, True
+        
         # Extract keywords from title and body
         text = f"{issue_title} {(issue_body or '')[:200]}"
         
@@ -481,7 +562,7 @@ Return ONLY a number from 0 to 100. No explanation."""
         keywords = [w for w in words if w not in stop_words][:5]
         
         if not keywords:
-            return []
+            return [], False
         
         # Build search query
         query = " ".join(keywords)
@@ -490,7 +571,7 @@ Return ONLY a number from 0 to 100. No explanation."""
         response = await self._make_github_request(search_url)
         
         if not response or "items" not in response:
-            return []
+            return [], False
         
         results = []
         for item in response["items"]:
@@ -521,7 +602,12 @@ Return ONLY a number from 0 to 100. No explanation."""
         # Sort by relevance
         results.sort(key=lambda x: x["relevance_score"], reverse=True)
         
-        return results[:10]
+        result = results[:10]
+        
+        # Cache the result
+        _advanced_cache.set("cross_repo", result, issue_title, issue_body[:200] if issue_body else "", exclude_repo)
+        
+        return result, False
 
 
 # Singleton

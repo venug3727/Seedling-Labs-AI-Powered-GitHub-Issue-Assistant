@@ -3,6 +3,7 @@ Vercel Serverless Function for Issue Dependencies.
 Endpoint: POST /api/dependencies
 
 Uses same reference parsing logic as backend/app/services/advanced_features.py
+Includes smart caching for cost & latency optimization.
 """
 
 import json
@@ -10,6 +11,7 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler
 import httpx
+from _cache import generate_cache_key, cache_get, cache_set
 
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -88,6 +90,17 @@ class handler(BaseHTTPRequestHandler):
 
             owner, repo = match.groups()
             
+            # Check cache first
+            cache_key = generate_cache_key("dependencies", repo_url, issue_number, max_depth)
+            cached_result = cache_get(cache_key)
+            if cached_result:
+                self.wfile.write(json.dumps({
+                    "success": True,
+                    "data": cached_result,
+                    "cached": True
+                }).encode())
+                return
+            
             github_token = os.getenv("GITHUB_TOKEN", "")
             headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "Seedling-Issue-Assistant/1.0"}
             if github_token:
@@ -138,15 +151,21 @@ class handler(BaseHTTPRequestHandler):
 
             fetch_and_process(issue_number, 0)
 
+            result_data = {
+                "nodes": nodes,
+                "edges": edges,
+                "root_issue": issue_number,
+                "total_nodes": len(nodes),
+                "total_edges": len(edges)
+            }
+            
+            # Cache the result
+            cache_set(cache_key, result_data)
+
             self.wfile.write(json.dumps({
                 "success": True,
-                "data": {
-                    "nodes": nodes,
-                    "edges": edges,
-                    "root_issue": issue_number,
-                    "total_nodes": len(nodes),
-                    "total_edges": len(edges)
-                }
+                "data": result_data,
+                "cached": False
             }).encode())
 
         except Exception as e:

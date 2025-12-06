@@ -3,6 +3,7 @@ Vercel Serverless Function for Duplicate Detection.
 Endpoint: POST /api/duplicates
 
 Uses same prompt as backend/app/services/advanced_features.py
+Includes smart caching for cost & latency optimization.
 """
 
 import json
@@ -10,6 +11,7 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler
 import httpx
+from _cache import generate_cache_key, cache_get, cache_set
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
@@ -106,7 +108,20 @@ class handler(BaseHTTPRequestHandler):
             if not other_issues:
                 self.wfile.write(json.dumps({
                     "success": True,
-                    "data": {"source_issue": {"number": issue_number, "title": source.get("title")}, "potential_duplicates": []}
+                    "data": {"source_issue": {"number": issue_number, "title": source.get("title")}, "potential_duplicates": []},
+                    "cached": False
+                }).encode())
+                return
+
+            # Check cache first
+            cache_key = generate_cache_key("duplicates", repo_url, issue_number, threshold)
+            cached_result = cache_get(cache_key)
+            
+            if cached_result:
+                self.wfile.write(json.dumps({
+                    "success": True,
+                    "data": cached_result,
+                    "cached": True
                 }).encode())
                 return
 
@@ -146,12 +161,18 @@ class handler(BaseHTTPRequestHandler):
             # Sort by similarity score (same as backend)
             candidates.sort(key=lambda x: x["similarity_score"], reverse=True)
 
+            result_data = {
+                "source_issue": {"number": issue_number, "title": source.get("title")},
+                "potential_duplicates": candidates[:5]  # Return top 5 (same as backend)
+            }
+            
+            # Store in cache
+            cache_set(cache_key, result_data)
+
             self.wfile.write(json.dumps({
                 "success": True,
-                "data": {
-                    "source_issue": {"number": issue_number, "title": source.get("title")},
-                    "potential_duplicates": candidates[:5]  # Return top 5 (same as backend)
-                }
+                "data": result_data,
+                "cached": False
             }).encode())
 
         except Exception as e:

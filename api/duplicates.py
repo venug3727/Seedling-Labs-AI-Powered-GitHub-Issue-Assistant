@@ -11,7 +11,7 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler
 import httpx
-from _cache import generate_cache_key, cache_get, cache_set
+from cache_utils import generate_cache_key, cache_get, cache_set
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 

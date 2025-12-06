@@ -122,11 +122,11 @@ function App() {
         );
       } else if (err.response) {
         // Server responded with error
-        setError(
-          err.response.data?.detail ||
-            err.response.data?.error ||
-            "Server error. Please try again."
-        );
+        const errorData = err.response.data;
+        const errorMsg = typeof errorData === 'string' 
+          ? errorData 
+          : errorData?.detail || errorData?.error || "Server error. Please try again.";
+        setError(typeof errorMsg === 'string' ? errorMsg : JSON.stringify(errorMsg));
       } else if (err.request) {
         // No response received
         setError(

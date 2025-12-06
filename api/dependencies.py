@@ -11,7 +11,7 @@ import os
 import re
 from http.server import BaseHTTPRequestHandler
 import httpx
-from _cache import generate_cache_key, cache_get, cache_set
+from cache_utils import generate_cache_key, cache_get, cache_set
 
 GITHUB_API_BASE = "https://api.github.com"
 

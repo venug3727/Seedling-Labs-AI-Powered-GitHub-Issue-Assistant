@@ -8,27 +8,29 @@ Uses an Agentic approach with:
 - Smart caching for latency & cost optimization
 - Confidence scoring for AI transparency
 - Draft response generation for agentic assistance
-- Gemini 2.0 Flash for fast, cost-effective analysis
+- Hugging Face Inference API for free, reliable analysis
 """
 
 import json
 import os
 import logging
 import hashlib
+import httpx
 from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta
-
-import google.generativeai as genai
 
 from app.models import GitHubIssueData, IssueAnalysis
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
+# Hugging Face Inference API
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
-# ============================================================================
+
+ 
 # SMART CACHE - Cost & Latency Optimization
-# ============================================================================
+ 
 class AnalysisCache:
     """
     In-memory cache for issue analysis results.
@@ -73,9 +75,9 @@ class AnalysisCache:
 _analysis_cache = AnalysisCache(ttl_minutes=60)
 
 
-# ============================================================================
+ 
 # SYSTEM PROMPT - Agentic "Product Manager" Persona
-# ============================================================================
+
 SYSTEM_PROMPT = """You are a Senior Technical Product Manager at a fast-paced tech startup.
 
 Your role is to analyze GitHub issues and provide structured, actionable insights that help engineering teams prioritize their backlog effectively.
@@ -124,106 +126,53 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, just the JS
     "potential_impact": "string - Impact on users, especially for bugs",
     "confidence_score": "float - 0.0 to 1.0, your confidence in this analysis",
     "draft_response": "string - A polite, professional response to post on GitHub"
-}
-"""
-
-# ============================================================================
-# FEW-SHOT EXAMPLES - Teaching the LLM expected behavior
-# ============================================================================
-FEW_SHOT_EXAMPLES = [
-    {
-        "role": "user",
-        "content": """Analyze this GitHub issue:
-
-Title: App crashes on login when using SSO
-Body: After the latest update (v2.3.1), clicking "Sign in with Google" causes the entire app to crash. This is happening on both iOS and Android. We have several enterprise customers who rely on SSO and they cannot access the app at all.
-
-Comments:
-- user_jane: "Same issue here. Our team of 50 people is completely blocked."
-- user_mike: "Confirmed on iOS 17.1. Stack trace shows null pointer in AuthManager."
-- maintainer_alex: "Looking into this urgently."
-
-Labels: []
-State: open"""
-    },
-    {
-        "role": "model",
-        "content": """{
-    "summary": "Critical app crash occurs when users attempt to sign in using Google SSO, completely blocking enterprise customers from accessing the application.",
-    "type": "bug",
-    "priority_score": 5,
-    "priority_justification": "Production crash affecting core authentication flow, blocking multiple enterprise customers and their teams from using the product entirely.",
-    "suggested_labels": ["bug", "critical", "authentication", "SSO", "regression"],
-    "potential_impact": "Severe - Enterprise customers with teams of 50+ users are completely unable to access the application, causing significant business disruption and potential churn risk.",
-    "confidence_score": 0.95,
-    "draft_response": "Hi @user, thank you for reporting this critical issue! We've confirmed the SSO crash affecting Google sign-in and have escalated this to our highest priority. Our team is actively investigating the null pointer in AuthManager. We'll provide updates here as we make progress and aim to have a fix deployed within 24 hours."
 }"""
-    },
-    {
-        "role": "user",
-        "content": """Analyze this GitHub issue:
 
-Title: Add dark mode support
-Body: It would be great if the app supported dark mode. My eyes hurt when using the app at night.
 
-Comments:
-- user_bob: "+1, would love this feature"
-- user_alice: "Yes please! iOS has had system-wide dark mode for years."
+ 
+# FEW-SHOT EXAMPLES - For consistent JSON output
+ 
+FEW_SHOT_EXAMPLE_1 = """Example 1:
+Issue Title: App crashes on login when using SSO
+Issue Body: After the latest update (v2.3.1), clicking "Sign in with Google" causes the entire app to crash. This is happening on both iOS and Android. We have several enterprise customers who rely on SSO and they cannot access the app at all.
+Comments: user_jane: "Same issue here. Our team of 50 people is completely blocked." | user_mike: "Confirmed on iOS 17.1. Stack trace shows null pointer in AuthManager."
 
-Labels: ["enhancement"]
-State: open"""
-    },
-    {
-        "role": "model",
-        "content": """{
-    "summary": "User requests dark mode support for the application to reduce eye strain during nighttime usage.",
-    "type": "feature_request",
-    "priority_score": 2,
-    "priority_justification": "Quality of life improvement with user interest, but not blocking any core functionality. Common feature request but requires significant UI work.",
-    "suggested_labels": ["enhancement", "UI/UX", "accessibility", "good-first-issue"],
-    "potential_impact": "Low to moderate - Would improve user experience for night-time users and those with light sensitivity, but no functional impact on current users.",
-    "confidence_score": 0.92,
-    "draft_response": "Thanks for the suggestion! Dark mode is a popular request and we've added it to our feature backlog. While we can't commit to a specific timeline yet, we appreciate the feedback and will update this issue when we have more information on implementation plans."
-}"""
-    }
-]
+Response:
+{"summary": "Critical app crash occurs when users attempt to sign in using Google SSO, completely blocking enterprise customers from accessing the application.", "type": "bug", "priority_score": 5, "priority_justification": "Production crash affecting core authentication flow, blocking multiple enterprise customers and their teams from using the product entirely.", "suggested_labels": ["bug", "critical", "authentication", "SSO", "regression"], "potential_impact": "Severe - Enterprise customers with teams of 50+ users are completely unable to access the application, causing significant business disruption and potential churn risk.", "confidence_score": 0.95, "draft_response": "Hi, thank you for reporting this critical issue! We've confirmed the SSO crash affecting Google sign-in and have escalated this to our highest priority. Our team is actively investigating and we aim to have a fix deployed within 24 hours."}"""
+
+FEW_SHOT_EXAMPLE_2 = """Example 2:
+Issue Title: Add dark mode support
+Issue Body: It would be great if the app supported dark mode. My eyes hurt when using the app at night.
+Comments: user_bob: "+1, would love this feature" | user_alice: "Yes please! iOS has had system-wide dark mode for years."
+
+Response:
+{"summary": "User requests dark mode support for the application to reduce eye strain during nighttime usage.", "type": "feature_request", "priority_score": 2, "priority_justification": "Quality of life improvement with user interest, but not blocking any core functionality. Common feature request but requires significant UI work.", "suggested_labels": ["enhancement", "UI/UX", "accessibility", "good-first-issue"], "potential_impact": "Low to moderate - Would improve user experience for night-time users and those with light sensitivity, but no functional impact on current users.", "confidence_score": 0.92, "draft_response": "Thanks for the suggestion! Dark mode is a popular request and we've added it to our feature backlog. While we can't commit to a specific timeline yet, we appreciate the feedback and will update this issue when we have more information."}"""
 
 
 class LLMService:
     """
-    Service class for interacting with Google's Gemini LLM.
-    Implements agentic prompt engineering for reliable issue analysis.
-    Includes smart caching for cost & latency optimization.
+    Service for analyzing GitHub issues using Hugging Face Inference API.
+    Uses Mistral-7B-Instruct for fast, reliable analysis.
     """
 
     def __init__(self):
-        """Initialize the Gemini client with API key from environment."""
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        """Initialize the Hugging Face client with API key from environment."""
+        self.api_key = os.getenv("HUGGINGFACE_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "GEMINI_API_KEY environment variable is not set. "
+                "HUGGINGFACE_API_KEY environment variable is not set. "
                 "Please set it in your .env file."
             )
         
-        # Configure the Gemini API
-        genai.configure(api_key=self.api_key)
-        
-        # Use Gemini 2.0 Flash - the latest fast model
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            generation_config={
-                "temperature": 0.3,  # Lower temperature for more consistent output
-                "top_p": 0.8,
-                "top_k": 40,
-                "max_output_tokens": 1500,  # Increased for draft_response
-            },
-            system_instruction=SYSTEM_PROMPT
-        )
+        self.headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
         # Reference to global cache
         self.cache = _analysis_cache
         
-        logger.info("LLM Service initialized with Gemini 2.0 Flash + Smart Caching")
+        logger.info("LLM Service initialized with Hugging Face Mistral-7B + Smart Caching")
 
     def _format_issue_for_analysis(self, issue_data: GitHubIssueData) -> str:
         """
@@ -235,9 +184,9 @@ class LLMService:
         
         # Format comments
         if issue_data.comments:
-            comments_text = "\n".join([
-                f"- {c.author}: \"{c.body[:500]}{'...' if len(c.body) > 500 else ''}\""
-                for c in issue_data.comments[:10]  # Limit to first 10 comments
+            comments_text = " | ".join([
+                f"{c.author}: \"{c.body[:200]}{'...' if len(c.body) > 200 else ''}\""
+                for c in issue_data.comments[:5]  # Limit to first 5 comments
             ])
         else:
             comments_text = "(No comments)"
@@ -245,23 +194,11 @@ class LLMService:
         # Format existing labels
         labels = issue_data.labels if issue_data.labels else ["(none)"]
         
-        # Note if content was truncated
-        truncation_note = ""
-        if issue_data.was_truncated:
-            truncation_note = "\n\n[Note: Issue content was truncated due to length]"
-        
-        return f"""Analyze this GitHub issue:
-
-Title: {issue_data.title}
-Body: {body}
-
-Comments:
-{comments_text}
-
+        return f"""Issue Title: {issue_data.title}
+Issue Body: {body[:1500]}
+Comments: {comments_text}
 Labels: {labels}
-State: {issue_data.state}
-Author: {issue_data.author}
-URL: {issue_data.html_url}{truncation_note}"""
+State: {issue_data.state}"""
 
     def _parse_llm_response(self, response_text: str) -> dict:
         """
@@ -270,16 +207,12 @@ URL: {issue_data.html_url}{truncation_note}"""
         """
         text = response_text.strip()
         
-        # Remove markdown code blocks if present
-        if text.startswith("```json"):
-            text = text[7:]
-        elif text.startswith("```"):
-            text = text[3:]
+        # Find JSON in response
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
         
-        if text.endswith("```"):
-            text = text[:-3]
-        
-        text = text.strip()
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
         
         # Parse JSON
         try:
@@ -287,7 +220,17 @@ URL: {issue_data.html_url}{truncation_note}"""
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
             logger.error(f"Response was: {response_text[:500]}")
-            raise ValueError(f"LLM did not return valid JSON: {e}")
+            # Return a default response if parsing fails
+            return {
+                "summary": "Unable to parse AI response",
+                "type": "other",
+                "priority_score": 3,
+                "priority_justification": "Analysis could not be completed",
+                "suggested_labels": ["needs-triage"],
+                "potential_impact": "Unknown",
+                "confidence_score": 0.1,
+                "draft_response": "Thank you for submitting this issue. Our team will review it shortly."
+            }
 
     async def analyze_issue(self, issue_data: GitHubIssueData, repo_url: str = "", issue_number: int = 0) -> Tuple[IssueAnalysis, bool]:
         """
@@ -314,36 +257,82 @@ URL: {issue_data.html_url}{truncation_note}"""
         logger.info(f"Analyzing issue: {issue_data.title[:50]}... (cache miss)")
         
         # Format the issue for the LLM
-        user_prompt = self._format_issue_for_analysis(issue_data)
+        user_issue = self._format_issue_for_analysis(issue_data)
         
-        # Build conversation with few-shot examples
-        chat_history = []
-        
-        # Add few-shot examples
-        for example in FEW_SHOT_EXAMPLES:
-            chat_history.append({
-                "role": example["role"],
-                "parts": [example["content"]]
-            })
-        
+        # Build the full prompt with system instruction and few-shot examples
+        full_prompt = f"""<s>[INST] {SYSTEM_PROMPT}
+
+{FEW_SHOT_EXAMPLE_1}
+
+{FEW_SHOT_EXAMPLE_2}
+
+Now analyze this issue and respond with ONLY valid JSON:
+
+{user_issue}
+
+Response: [/INST]"""
+
         try:
-            # Start chat with few-shot examples (system_instruction is set in model config)
-            chat = self.model.start_chat(history=chat_history)
-            
-            # Send the actual issue for analysis
-            response = await chat.send_message_async(user_prompt)
-            
-            # Parse the response
-            analysis_dict = self._parse_llm_response(response.text)
-            
-            # Validate against Pydantic model
-            analysis = IssueAnalysis(**analysis_dict)
-            
-            # Store in cache
-            self.cache.set(repo_url, issue_number, issue_data.created_at, analysis)
-            
-            logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}, Confidence: {analysis.confidence_score}")
-            return analysis, False
+            # Call Hugging Face Inference API
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    HUGGINGFACE_API_URL,
+                    headers=self.headers,
+                    json={
+                        "inputs": full_prompt,
+                        "parameters": {
+                            "max_new_tokens": 800,
+                            "temperature": 0.3,
+                            "top_p": 0.9,
+                            "do_sample": True,
+                            "return_full_text": False
+                        }
+                    }
+                )
+                
+                if response.status_code == 503:
+                    # Model is loading, wait and retry
+                    logger.info("Model is loading, waiting...")
+                    import asyncio
+                    await asyncio.sleep(20)
+                    response = await client.post(
+                        HUGGINGFACE_API_URL,
+                        headers=self.headers,
+                        json={
+                            "inputs": full_prompt,
+                            "parameters": {
+                                "max_new_tokens": 800,
+                                "temperature": 0.3,
+                                "top_p": 0.9,
+                                "do_sample": True,
+                                "return_full_text": False
+                            }
+                        }
+                    )
+                
+                if response.status_code != 200:
+                    logger.error(f"Hugging Face API error: {response.status_code} - {response.text}")
+                    raise Exception(f"Hugging Face API error: {response.status_code}")
+                
+                result = response.json()
+                
+                # Extract generated text
+                if isinstance(result, list) and len(result) > 0:
+                    generated_text = result[0].get("generated_text", "")
+                else:
+                    generated_text = str(result)
+                
+                # Parse the response
+                analysis_dict = self._parse_llm_response(generated_text)
+                
+                # Validate against Pydantic model
+                analysis = IssueAnalysis(**analysis_dict)
+                
+                # Store in cache
+                self.cache.set(repo_url, issue_number, issue_data.created_at, analysis)
+                
+                logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}, Confidence: {analysis.confidence_score}")
+                return analysis, False
             
         except Exception as e:
             logger.error(f"Error during LLM analysis: {e}")
@@ -357,9 +346,13 @@ URL: {issue_data.html_url}{truncation_note}"""
             bool: True if service is healthy
         """
         try:
-            # Simple test to verify API connectivity
-            response = self.model.generate_content("Reply with 'OK' if you can read this.")
-            return "OK" in response.text or len(response.text) > 0
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    HUGGINGFACE_API_URL,
+                    headers=self.headers,
+                    json={"inputs": "Hello", "parameters": {"max_new_tokens": 10}}
+                )
+                return response.status_code in [200, 503]  # 503 means model loading
         except Exception as e:
             logger.error(f"LLM health check failed: {e}")
             return False

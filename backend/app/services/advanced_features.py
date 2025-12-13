@@ -20,17 +20,18 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import httpx
-import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
+
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 GITHUB_API_BASE = "https://api.github.com"
 REQUEST_TIMEOUT = 30.0
 
 
-# ============================================================================
+ 
 # SMART CACHE - Cost & Latency Optimization for Advanced Features
-# ============================================================================
+ 
 class AdvancedFeaturesCache:
     """
     In-memory cache for advanced features results.
@@ -125,13 +126,12 @@ class AdvancedFeaturesService:
         if self.github_token:
             self.headers["Authorization"] = f"token {self.github_token}"
         
-        # Initialize Gemini for similarity analysis
-        api_key = os.getenv("GEMINI_API_KEY")
-        if api_key:
-            genai.configure(api_key=api_key)
-            self.model = genai.GenerativeModel("gemini-2.0-flash")
-        else:
-            self.model = None
+        # Initialize Hugging Face for similarity analysis
+        self.hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+        self.hf_headers = {
+            "Authorization": f"Bearer {self.hf_api_key}" if self.hf_api_key else "",
+            "Content-Type": "application/json"
+        }
 
     async def _make_github_request(self, url: str) -> Optional[dict]:
         """Make a request to GitHub API."""
@@ -298,21 +298,22 @@ class AdvancedFeaturesService:
         # Filter out the current issue
         other_issues = [i for i in issues if i.get("number") != issue_number]
         
-        if not other_issues or not self.model:
+        if not other_issues or not self.hf_api_key:
             return [], False
         
         # Prepare issue summaries for comparison
         current_summary = f"Title: {issue_title}\nBody: {(issue_body or '')[:500]}"
         
         candidates = []
-        for issue in other_issues[:20]:  # Limit to 20 for API efficiency
-            other_title = issue.get("title", "")
-            other_body = (issue.get("body") or "")[:500]
-            other_summary = f"Title: {other_title}\nBody: {other_body}"
-            
-            # Use Gemini to compute similarity
-            prompt = f"""Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
-            
+        async with httpx.AsyncClient(timeout=60) as client:
+            for issue in other_issues[:20]:  # Limit to 20 for API efficiency
+                other_title = issue.get("title", "")
+                other_body = (issue.get("body") or "")[:500]
+                other_summary = f"Title: {other_title}\nBody: {other_body}"
+                
+                # Use Hugging Face to compute similarity
+                prompt = f"""<s>[INST] Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
+                
 Issue 1:
 {current_summary}
 
@@ -324,26 +325,49 @@ Consider:
 - Are they requesting the same feature?
 - Do they have similar root causes?
 
-Return ONLY a number from 0 to 100. No explanation."""
-            
-            try:
-                response = self.model.generate_content(prompt)
-                score_text = response.text.strip()
-                # Extract number from response
-                score_match = re.search(r'\d+', score_text)
-                if score_match:
-                    score = int(score_match.group()) / 100.0
-                    if score >= 0.5:  # Only include if 50%+ similar
-                        candidates.append({
-                            "issue_number": issue.get("number"),
-                            "title": other_title,
-                            "similarity_score": round(score, 2),
-                            "html_url": issue.get("html_url", ""),
-                            "state": issue.get("state", "unknown")
-                        })
-            except Exception as e:
-                logger.warning(f"Similarity check failed: {e}")
-                continue
+Return ONLY a number from 0 to 100. No explanation. [/INST]"""
+                
+                try:
+                    response = await client.post(
+                        HUGGINGFACE_API_URL,
+                        headers=self.hf_headers,
+                        json={
+                            "inputs": prompt,
+                            "parameters": {
+                                "max_new_tokens": 20,
+                                "temperature": 0.1,
+                                "top_p": 0.9,
+                                "do_sample": True,
+                                "return_full_text": False
+                            }
+                        }
+                    )
+                    
+                    if response.status_code != 200:
+                        logger.warning(f"HF API error: {response.status_code}")
+                        continue
+                    
+                    result = response.json()
+                    if isinstance(result, list) and len(result) > 0:
+                        score_text = result[0].get("generated_text", "").strip()
+                    else:
+                        continue
+                    
+                    # Extract number from response
+                    score_match = re.search(r'\d+', score_text)
+                    if score_match:
+                        score = int(score_match.group()) / 100.0
+                        if score >= 0.5:  # Only include if 50%+ similar
+                            candidates.append({
+                                "issue_number": issue.get("number"),
+                                "title": other_title,
+                                "similarity_score": round(score, 2),
+                                "html_url": issue.get("html_url", ""),
+                                "state": issue.get("state", "unknown")
+                            })
+                except Exception as e:
+                    logger.warning(f"Similarity check failed: {e}")
+                    continue
         
         # Sort by similarity score
         candidates.sort(key=lambda x: x["similarity_score"], reverse=True)

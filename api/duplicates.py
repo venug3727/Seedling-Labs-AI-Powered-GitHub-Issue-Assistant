@@ -2,7 +2,7 @@
 Vercel Serverless Function for Duplicate Detection.
 Endpoint: POST /api/duplicates
 
-Uses same prompt as backend/app/services/advanced_features.py
+Uses Hugging Face Inference API (Mistral-7B) for free, reliable analysis.
 Includes smart caching for cost & latency optimization.
 """
 
@@ -10,9 +10,14 @@ import json
 import os
 import re
 import hashlib
+import time
+import logging
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 import httpx
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # In-memory cache
 _cache = {}
@@ -33,10 +38,10 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 # Same prompt as backend advanced_features.py find_duplicate_issues()
-DUPLICATE_PROMPT_TEMPLATE = """Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
+DUPLICATE_PROMPT_TEMPLATE = """<s>[INST] Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
 
 Issue 1:
 Title: {source_title}
@@ -51,24 +56,60 @@ Consider:
 - Are they requesting the same feature?
 - Do they have similar root causes?
 
-Return ONLY a number from 0 to 100. No explanation."""
+Return ONLY a number from 0 to 100. No explanation. [/INST]"""
 
 
-def call_gemini(prompt: str, api_key: str) -> str:
-    """Call Gemini and return raw text response."""
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 50}
+def call_huggingface_similarity(prompt: str, api_key: str) -> str:
+    """Call Hugging Face API and return raw text response for similarity score."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
+    
     with httpx.Client(timeout=60) as client:
-        resp = client.post(f"{GEMINI_API_URL}?key={api_key}", json=payload, headers={"Content-Type": "application/json"})
-        if resp.status_code != 200:
+        response = client.post(
+            HUGGINGFACE_API_URL,
+            headers=headers,
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 20,
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "do_sample": True,
+                    "return_full_text": False
+                }
+            }
+        )
+        
+        if response.status_code == 503:
+            # Model is loading, wait and retry
+            time.sleep(20)
+            response = client.post(
+                HUGGINGFACE_API_URL,
+                headers=headers,
+                json={
+                    "inputs": prompt,
+                    "parameters": {
+                        "max_new_tokens": 20,
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                        "do_sample": True,
+                        "return_full_text": False
+                    }
+                }
+            )
+        
+        if response.status_code != 200:
+            logger.error(f"Hugging Face API error: {response.status_code}")
             return ""
-        data = resp.json()
-        try:
-            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except:
-            return ""
+        
+        result = response.json()
+        
+        # Extract generated text
+        if isinstance(result, list) and len(result) > 0:
+            return result[0].get("generated_text", "").strip()
+        return ""
 
 
 class handler(BaseHTTPRequestHandler):
@@ -94,9 +135,9 @@ class handler(BaseHTTPRequestHandler):
             issue_number = data.get("issue_number")
             threshold = data.get("threshold", 0.5)  # Same default as backend (50%)
 
-            api_key = os.getenv("GEMINI_API_KEY")
+            api_key = os.getenv("HUGGINGFACE_API_KEY")
             if not api_key:
-                self.wfile.write(json.dumps({"success": False, "error": "GEMINI_API_KEY not configured"}).encode())
+                self.wfile.write(json.dumps({"success": False, "error": "HUGGINGFACE_API_KEY not configured"}).encode())
                 return
 
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", repo_url)
@@ -163,7 +204,7 @@ class handler(BaseHTTPRequestHandler):
                     target_body=target_body
                 )
                 
-                score_text = call_gemini(prompt, api_key)
+                score_text = call_huggingface_similarity(prompt, api_key)
                 
                 # Extract number from response (same logic as backend)
                 score_match = re.search(r'\d+', score_text)

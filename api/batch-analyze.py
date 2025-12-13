@@ -2,18 +2,22 @@
 Vercel Serverless Function for Batch Analysis.
 Endpoint: POST /api/batch-analyze
 
-Uses same prompts as backend llm_service.py for each issue.
+Uses Hugging Face Inference API (Mistral-7B) for free, reliable analysis.
 Includes smart caching for cost & latency optimization.
-Uses full few-shot prompting for consistent analysis quality.
 """
 
 import json
 import os
 import re
 import hashlib
+import time
+import logging
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 import httpx
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # In-memory cache
 _cache = {}
@@ -34,10 +38,10 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 # =============================================================================
-# SYSTEM PROMPT - Agentic "Product Manager" Persona (Same as analyze.py)
+# SYSTEM PROMPT - Same as analyze.py
 # =============================================================================
 SYSTEM_PROMPT = """You are a Senior Technical Product Manager at a fast-paced tech startup.
 
@@ -89,93 +93,101 @@ You MUST respond with ONLY valid JSON. No markdown, no explanations, just the JS
     "draft_response": "string - A polite, professional response to post on GitHub"
 }"""
 
-# =============================================================================
-# FEW-SHOT EXAMPLES (Same as analyze.py)
-# =============================================================================
-FEW_SHOT_EXAMPLE_1_USER = """Analyze this GitHub issue:
+FEW_SHOT_EXAMPLE_1 = """Example 1:
+Issue Title: App crashes on login when using SSO
+Issue Body: After the latest update (v2.3.1), clicking "Sign in with Google" causes the entire app to crash.
+Comments: user_jane: "Same issue here. Our team of 50 people is completely blocked."
 
-Title: App crashes on login when using SSO
-Body: After the latest update (v2.3.1), clicking "Sign in with Google" causes the entire app to crash. This is happening on both iOS and Android. We have several enterprise customers who rely on SSO and they cannot access the app at all.
+Response:
+{"summary": "Critical app crash occurs when users attempt to sign in using Google SSO.", "type": "bug", "priority_score": 5, "priority_justification": "Production crash affecting core authentication.", "suggested_labels": ["bug", "critical", "authentication"], "potential_impact": "Severe - Enterprise customers blocked.", "confidence_score": 0.95, "draft_response": "Thank you for reporting! We've escalated this to highest priority and aim to fix within 24 hours."}"""
 
-Comments:
-- user_jane: "Same issue here. Our team of 50 people is completely blocked."
-- user_mike: "Confirmed on iOS 17.1. Stack trace shows null pointer in AuthManager."
-- maintainer_alex: "Looking into this urgently."
+FEW_SHOT_EXAMPLE_2 = """Example 2:
+Issue Title: Add dark mode support
+Issue Body: It would be great if the app supported dark mode. My eyes hurt when using the app at night.
+Comments: user_bob: "+1, would love this feature"
 
-Labels: []
-State: open"""
-
-FEW_SHOT_EXAMPLE_1_RESPONSE = """{
-    "summary": "Critical app crash occurs when users attempt to sign in using Google SSO, completely blocking enterprise customers from accessing the application.",
-    "type": "bug",
-    "priority_score": 5,
-    "priority_justification": "Production crash affecting core authentication flow, blocking multiple enterprise customers and their teams from using the product entirely.",
-    "suggested_labels": ["bug", "critical", "authentication", "SSO", "regression"],
-    "potential_impact": "Severe - Enterprise customers with teams of 50+ users are completely unable to access the application, causing significant business disruption and potential churn risk.",
-    "confidence_score": 0.95,
-    "draft_response": "Hi @user, thank you for reporting this critical issue! We've confirmed the SSO crash affecting Google sign-in and have escalated this to our highest priority. Our team is actively investigating the null pointer in AuthManager. We'll provide updates here as we make progress and aim to have a fix deployed within 24 hours."
-}"""
-
-FEW_SHOT_EXAMPLE_2_USER = """Analyze this GitHub issue:
-
-Title: Add dark mode support
-Body: It would be great if the app supported dark mode. My eyes hurt when using the app at night.
-
-Comments:
-- user_bob: "+1, would love this feature"
-- user_alice: "Yes please! iOS has had system-wide dark mode for years."
-
-Labels: ["enhancement"]
-State: open"""
-
-FEW_SHOT_EXAMPLE_2_RESPONSE = """{
-    "summary": "User requests dark mode support for the application to reduce eye strain during nighttime usage.",
-    "type": "feature_request",
-    "priority_score": 2,
-    "priority_justification": "Quality of life improvement with user interest, but not blocking any core functionality. Common feature request but requires significant UI work.",
-    "suggested_labels": ["enhancement", "UI/UX", "accessibility", "good-first-issue"],
-    "potential_impact": "Low to moderate - Would improve user experience for night-time users and those with light sensitivity, but no functional impact on current users.",
-    "confidence_score": 0.92,
-    "draft_response": "Thanks for the suggestion! Dark mode is a popular request and we've added it to our feature backlog. While we can't commit to a specific timeline yet, we appreciate the feedback and will update this issue when we have more information on implementation plans."
-}"""
+Response:
+{"summary": "User requests dark mode support to reduce eye strain.", "type": "feature_request", "priority_score": 2, "priority_justification": "Quality of life improvement, not blocking functionality.", "suggested_labels": ["enhancement", "UI/UX"], "potential_impact": "Low to moderate - UX improvement.", "confidence_score": 0.92, "draft_response": "Thanks for the suggestion! Dark mode is on our backlog. We'll update when we have more info."}"""
 
 
-def call_gemini(prompt: str, api_key: str) -> dict:
-    """Call Gemini API with few-shot examples for consistent quality."""
-    # Build conversation with few-shot examples (same as analyze.py)
-    contents = [
-        {"role": "user", "parts": [{"text": SYSTEM_PROMPT + "\n\n" + FEW_SHOT_EXAMPLE_1_USER}]},
-        {"role": "model", "parts": [{"text": FEW_SHOT_EXAMPLE_1_RESPONSE}]},
-        {"role": "user", "parts": [{"text": FEW_SHOT_EXAMPLE_2_USER}]},
-        {"role": "model", "parts": [{"text": FEW_SHOT_EXAMPLE_2_RESPONSE}]},
-        {"role": "user", "parts": [{"text": prompt}]}
-    ]
+def call_huggingface_api(user_prompt: str, api_key: str) -> dict:
+    """Call Hugging Face Inference API with Mistral-7B."""
     
-    payload = {
-        "contents": contents,
-        "generationConfig": {
-            "temperature": 0.3,
-            "topP": 0.8,
-            "topK": 40,
-            "maxOutputTokens": 1500,
-            "responseMimeType": "application/json"
-        }
+    full_prompt = f"""<s>[INST] {SYSTEM_PROMPT}
+
+{FEW_SHOT_EXAMPLE_1}
+
+{FEW_SHOT_EXAMPLE_2}
+
+Now analyze this issue and respond with ONLY valid JSON:
+
+{user_prompt}
+
+Response: [/INST]"""
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
     }
+    
     with httpx.Client(timeout=60) as client:
-        resp = client.post(f"{GEMINI_API_URL}?key={api_key}", json=payload, headers={"Content-Type": "application/json"})
-        if resp.status_code != 200:
+        response = client.post(
+            HUGGINGFACE_API_URL,
+            headers=headers,
+            json={
+                "inputs": full_prompt,
+                "parameters": {
+                    "max_new_tokens": 800,
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "do_sample": True,
+                    "return_full_text": False
+                }
+            }
+        )
+        
+        if response.status_code == 503:
+            # Model is loading, wait and retry
+            time.sleep(20)
+            response = client.post(
+                HUGGINGFACE_API_URL,
+                headers=headers,
+                json={
+                    "inputs": full_prompt,
+                    "parameters": {
+                        "max_new_tokens": 800,
+                        "temperature": 0.3,
+                        "top_p": 0.9,
+                        "do_sample": True,
+                        "return_full_text": False
+                    }
+                }
+            )
+        
+        if response.status_code != 200:
+            logger.error(f"Hugging Face API error: {response.status_code} - {response.text[:200]}")
             return {}
-        data = resp.json()
+        
+        result = response.json()
+        
+        # Extract generated text
+        if isinstance(result, list) and len(result) > 0:
+            generated_text = result[0].get("generated_text", "")
+        else:
+            generated_text = str(result)
+        
+        # Find JSON in response
+        text = generated_text.strip()
+        start_idx = text.find('{')
+        end_idx = text.rfind('}')
+        
+        if start_idx != -1 and end_idx != -1:
+            text = text[start_idx:end_idx + 1]
+        
         try:
-            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            return json.loads(text.strip())
-        except:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse response: {e}")
             return {}
 
 
@@ -199,11 +211,11 @@ class handler(BaseHTTPRequestHandler):
             data = json.loads(body)
 
             repo_url = data.get("repo_url", "")
-            issue_numbers = data.get("issue_numbers", [])[:10]  # Max 10 (same as backend)
+            issue_numbers = data.get("issue_numbers", [])[:10]  # Max 10
 
-            api_key = os.getenv("GEMINI_API_KEY")
+            api_key = os.getenv("HUGGINGFACE_API_KEY")
             if not api_key:
-                self.wfile.write(json.dumps({"success": False, "error": "GEMINI_API_KEY not configured"}).encode())
+                self.wfile.write(json.dumps({"success": False, "error": "HUGGINGFACE_API_KEY not configured"}).encode())
                 return
 
             match = re.match(r"https?://github\.com/([^/]+)/([^/]+)/?", repo_url)
@@ -271,7 +283,7 @@ State: {issue.get('state', 'unknown')}
 Author: {issue.get('user', {}).get('login', 'unknown')}
 URL: {issue.get('html_url', '')}"""
 
-                    analysis = call_gemini(prompt, api_key)
+                    analysis = call_huggingface_api(prompt, api_key)
                     
                     issue_result = {
                         "issue_number": num,
@@ -296,7 +308,7 @@ URL: {issue.get('html_url', '')}"""
                     cache_set(issue_cache_key, issue_result)
                     results.append(issue_result)
 
-            # Calculate aggregate statistics (same as backend)
+            # Calculate aggregate statistics
             successful = [r for r in results if r.get("success")]
             
             type_counts = {}

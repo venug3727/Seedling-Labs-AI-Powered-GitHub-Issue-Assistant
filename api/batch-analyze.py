@@ -38,7 +38,7 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 # =============================================================================
 # SYSTEM PROMPT - Same as analyze.py

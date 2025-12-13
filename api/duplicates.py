@@ -38,7 +38,7 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 # Same prompt as backend advanced_features.py find_duplicate_issues()
 DUPLICATE_PROMPT_TEMPLATE = """<s>[INST] Compare these two GitHub issues and rate their semantic similarity from 0 to 100.

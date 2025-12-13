@@ -23,7 +23,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 GITHUB_API_BASE = "https://api.github.com"
 REQUEST_TIMEOUT = 30.0

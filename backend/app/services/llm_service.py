@@ -25,7 +25,7 @@ from app.models import GitHubIssueData, IssueAnalysis
 logger = logging.getLogger(__name__)
 
 # Hugging Face Inference API
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 
  

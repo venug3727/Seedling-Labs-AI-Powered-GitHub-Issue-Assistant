@@ -40,7 +40,7 @@ def cache_set(key, value):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-HUGGINGFACE_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
 # =============================================================================
 # SYSTEM PROMPT - Agentic "Product Manager" Persona (Same as backend)

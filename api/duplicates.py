@@ -38,10 +38,11 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/v1/chat/completions"
 
 # Same prompt as backend advanced_features.py find_duplicate_issues()
-DUPLICATE_PROMPT_TEMPLATE = """<s>[INST] Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
+DUPLICATE_PROMPT_TEMPLATE = """Compare these two GitHub issues and rate their semantic similarity from 0 to 100.
 
 Issue 1:
 Title: {source_title}
@@ -56,30 +57,31 @@ Consider:
 - Are they requesting the same feature?
 - Do they have similar root causes?
 
-Return ONLY a number from 0 to 100. No explanation. [/INST]"""
+Return ONLY a number from 0 to 100. No explanation."""
 
 
 def call_huggingface_similarity(prompt: str, api_key: str) -> str:
-    """Call Hugging Face API and return raw text response for similarity score."""
+    """Call Hugging Face Chat Completions API and return similarity score."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "model": MODEL_ID,
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 20,
+        "temperature": 0.1,
+        "top_p": 0.9
     }
     
     with httpx.Client(timeout=60) as client:
         response = client.post(
             HUGGINGFACE_API_URL,
             headers=headers,
-            json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 20,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "do_sample": True,
-                    "return_full_text": False
-                }
-            }
+            json=payload
         )
         
         if response.status_code == 503:
@@ -88,16 +90,7 @@ def call_huggingface_similarity(prompt: str, api_key: str) -> str:
             response = client.post(
                 HUGGINGFACE_API_URL,
                 headers=headers,
-                json={
-                    "inputs": prompt,
-                    "parameters": {
-                        "max_new_tokens": 20,
-                        "temperature": 0.1,
-                        "top_p": 0.9,
-                        "do_sample": True,
-                        "return_full_text": False
-                    }
-                }
+                json=payload
             )
         
         if response.status_code != 200:
@@ -106,9 +99,9 @@ def call_huggingface_similarity(prompt: str, api_key: str) -> str:
         
         result = response.json()
         
-        # Extract generated text
-        if isinstance(result, list) and len(result) > 0:
-            return result[0].get("generated_text", "").strip()
+        # Extract generated text from OpenAI-compatible response
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"].strip()
         return ""
 
 

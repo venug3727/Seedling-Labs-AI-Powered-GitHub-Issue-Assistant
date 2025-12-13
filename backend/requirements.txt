@@ -14,5 +14,8 @@ python-dotenv==1.0.0
 # HTTP Client (Async)
 httpx==0.26.0
 
+# Hugging Face Inference Client
+huggingface-hub==0.20.2
+
 # Typing extensions (for Python 3.11 compatibility)
 typing-extensions==4.9.0

@@ -38,7 +38,8 @@ def cache_get(key):
 def cache_set(key, value):
     _cache[key] = (value, datetime.now())
 
-HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/v1/chat/completions"
 
 # =============================================================================
 # SYSTEM PROMPT - Same as analyze.py
@@ -111,39 +112,37 @@ Response:
 
 
 def call_huggingface_api(user_prompt: str, api_key: str) -> dict:
-    """Call Hugging Face Inference API with Mistral-7B."""
+    """Call Hugging Face Chat Completions API with Meta-Llama-3-8B-Instruct."""
     
-    full_prompt = f"""<s>[INST] {SYSTEM_PROMPT}
+    system_message = f"""{SYSTEM_PROMPT}
 
 {FEW_SHOT_EXAMPLE_1}
 
 {FEW_SHOT_EXAMPLE_2}
 
-Now analyze this issue and respond with ONLY valid JSON:
-
-{user_prompt}
-
-Response: [/INST]"""
+Now analyze this issue and respond with ONLY valid JSON:"""
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
+    payload = {
+        "model": MODEL_ID,
+        "messages": [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_tokens": 800,
+        "temperature": 0.3,
+        "top_p": 0.9
+    }
+    
     with httpx.Client(timeout=60) as client:
         response = client.post(
             HUGGINGFACE_API_URL,
             headers=headers,
-            json={
-                "inputs": full_prompt,
-                "parameters": {
-                    "max_new_tokens": 800,
-                    "temperature": 0.3,
-                    "top_p": 0.9,
-                    "do_sample": True,
-                    "return_full_text": False
-                }
-            }
+            json=payload
         )
         
         if response.status_code == 503:
@@ -152,29 +151,21 @@ Response: [/INST]"""
             response = client.post(
                 HUGGINGFACE_API_URL,
                 headers=headers,
-                json={
-                    "inputs": full_prompt,
-                    "parameters": {
-                        "max_new_tokens": 800,
-                        "temperature": 0.3,
-                        "top_p": 0.9,
-                        "do_sample": True,
-                        "return_full_text": False
-                    }
-                }
+                json=payload
             )
         
         if response.status_code != 200:
             logger.error(f"Hugging Face API error: {response.status_code} - {response.text[:200]}")
-            return {}
+            return {"error": f"Hugging Face API error: {response.status_code} - {response.text[:200]}"}
         
         result = response.json()
         
-        # Extract generated text
-        if isinstance(result, list) and len(result) > 0:
-            generated_text = result[0].get("generated_text", "")
+        # Extract generated text from OpenAI-compatible response
+        if "choices" in result and len(result["choices"]) > 0:
+            generated_text = result["choices"][0]["message"]["content"]
         else:
-            generated_text = str(result)
+            logger.error(f"Unexpected API response format: {result}")
+            return {"error": "Unexpected API response format"}
         
         # Find JSON in response
         text = generated_text.strip()

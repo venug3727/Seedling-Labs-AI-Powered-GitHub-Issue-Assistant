@@ -9,6 +9,43 @@ Uses an Agentic approach with:
 - Confidence scoring for AI transparency
 - Draft response generation for agentic assistance
 - Hugging Face Inference API for free, reliable analysis
+
+API Documentation:
+    Endpoint: https://api-inference.huggingface.co/models/{model_id}
+    Model: mistralai/Mistral-7B-Instruct-v0.2
+    
+    Request Format:
+        POST https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2
+        Headers:
+            Authorization: Bearer {HUGGINGFACE_API_KEY}
+            Content-Type: application/json
+        Body:
+            {
+                "inputs": "<s>[INST] {prompt} [/INST]",
+                "parameters": {
+                    "max_new_tokens": 800,
+                    "temperature": 0.3,
+                    "top_p": 0.9,
+                    "do_sample": true,
+                    "return_full_text": false
+                }
+            }
+    
+    Response Format:
+        Success (200):
+            [{"generated_text": "..."}]  # List format
+            OR
+            {"generated_text": "..."}     # Object format (some models)
+        
+        Model Loading (503):
+            {"error": "Model is loading", "estimated_time": 20.0}
+        
+        Error (4xx/5xx):
+            {"error": "Error message"}
+    
+    Environment Variables:
+        HUGGINGFACE_API_KEY: Required - Your Hugging Face API token
+            Get it from: https://huggingface.co/settings/tokens
 """
 
 import json
@@ -16,7 +53,7 @@ import os
 import logging
 import hashlib
 import httpx
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 from datetime import datetime, timedelta
 
 from app.models import GitHubIssueData, IssueAnalysis
@@ -24,8 +61,9 @@ from app.models import GitHubIssueData, IssueAnalysis
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Hugging Face Inference API
-HUGGINGFACE_API_URL = "https://router.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+# Hugging Face Router - OpenAI-compatible Chat Completions API
+MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+HUGGINGFACE_API_URL = "https://router.huggingface.co/v1/chat/completions"
 
 
  
@@ -164,6 +202,7 @@ class LLMService:
                 "Please set it in your .env file."
             )
         
+        # Initialize headers for direct API calls
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -172,7 +211,7 @@ class LLMService:
         # Reference to global cache
         self.cache = _analysis_cache
         
-        logger.info("LLM Service initialized with Hugging Face Mistral-7B + Smart Caching")
+        logger.info(f"LLM Service initialized with {MODEL_ID} via Router Chat Completions API + Smart Caching")
 
     def _format_issue_for_analysis(self, issue_data: GitHubIssueData) -> str:
         """
@@ -259,85 +298,61 @@ State: {issue_data.state}"""
         # Format the issue for the LLM
         user_issue = self._format_issue_for_analysis(issue_data)
         
-        # Build the full prompt with system instruction and few-shot examples
-        full_prompt = f"""<s>[INST] {SYSTEM_PROMPT}
-
-{FEW_SHOT_EXAMPLE_1}
-
-{FEW_SHOT_EXAMPLE_2}
-
-Now analyze this issue and respond with ONLY valid JSON:
-
-{user_issue}
-
-Response: [/INST]"""
+        # Build messages array for OpenAI-compatible API
+        system_message = f"{SYSTEM_PROMPT}\n\n{FEW_SHOT_EXAMPLE_1}\n\n{FEW_SHOT_EXAMPLE_2}"
+        user_message = f"Now analyze this issue and respond with ONLY valid JSON:\n\n{user_issue}"
+        
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
 
         try:
-            # Call Hugging Face Inference API
+            # Call Hugging Face Router API (OpenAI-compatible)
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
                     HUGGINGFACE_API_URL,
                     headers=self.headers,
                     json={
-                        "inputs": full_prompt,
-                        "parameters": {
-                            "max_new_tokens": 800,
-                            "temperature": 0.3,
-                            "top_p": 0.9,
-                            "do_sample": True,
-                            "return_full_text": False
-                        }
+                        "model": MODEL_ID,
+                        "messages": messages,
+                        "max_tokens": 800,
+                        "temperature": 0.3
                     }
                 )
                 
-                if response.status_code == 503:
-                    # Model is loading, wait and retry
-                    logger.info("Model is loading, waiting...")
-                    import asyncio
-                    await asyncio.sleep(20)
-                    response = await client.post(
-                        HUGGINGFACE_API_URL,
-                        headers=self.headers,
-                        json={
-                            "inputs": full_prompt,
-                            "parameters": {
-                                "max_new_tokens": 800,
-                                "temperature": 0.3,
-                                "top_p": 0.9,
-                                "do_sample": True,
-                                "return_full_text": False
-                            }
-                        }
-                    )
-                
-                if response.status_code != 200:
-                    logger.error(f"Hugging Face API error: {response.status_code} - {response.text}")
-                    raise Exception(f"Hugging Face API error: {response.status_code}")
-                
+                response.raise_for_status()
                 result = response.json()
                 
-                # Extract generated text
-                if isinstance(result, list) and len(result) > 0:
-                    generated_text = result[0].get("generated_text", "")
-                else:
-                    generated_text = str(result)
+                # Parse OpenAI-compatible response format
+                if "choices" not in result or not result["choices"]:
+                    raise ValueError(f"Invalid response format: {result}")
                 
-                # Parse the response
-                analysis_dict = self._parse_llm_response(generated_text)
-                
-                # Validate against Pydantic model
-                analysis = IssueAnalysis(**analysis_dict)
-                
-                # Store in cache
-                self.cache.set(repo_url, issue_number, issue_data.created_at, analysis)
-                
-                logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}, Confidence: {analysis.confidence_score}")
-                return analysis, False
+                generated_text = result["choices"][0]["message"]["content"]
+                logger.debug(f"Generated text length: {len(generated_text)} chars")
             
+            # Parse the response
+            analysis_dict = self._parse_llm_response(generated_text)
+            
+            # Validate against Pydantic model
+            analysis = IssueAnalysis(**analysis_dict)
+            
+            # Store in cache
+            self.cache.set(repo_url, issue_number, issue_data.created_at, analysis)
+            
+            logger.info(f"Analysis complete. Priority: {analysis.priority_score}, Type: {analysis.type}, Confidence: {analysis.confidence_score}")
+            return analysis, False
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error during LLM analysis: {e.response.status_code} - {e.response.text}")
+            raise Exception(f"LLM API request failed: {e.response.status_code}")
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout during LLM analysis: {e}")
+            raise Exception("LLM API request timed out after 60 seconds")
         except Exception as e:
             logger.error(f"Error during LLM analysis: {e}")
             raise
-
+ 
     async def health_check(self) -> bool:
         """
         Verify the LLM service is operational.
@@ -350,9 +365,13 @@ Response: [/INST]"""
                 response = await client.post(
                     HUGGINGFACE_API_URL,
                     headers=self.headers,
-                    json={"inputs": "Hello", "parameters": {"max_new_tokens": 10}}
+                    json={
+                        "model": MODEL_ID,
+                        "messages": [{"role": "user", "content": "Say OK"}],
+                        "max_tokens": 10
+                    }
                 )
-                return response.status_code in [200, 503]  # 503 means model loading
+                return response.status_code == 200
         except Exception as e:
             logger.error(f"LLM health check failed: {e}")
             return False
